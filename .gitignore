@@ -22,3 +22,7 @@ Desktop.ini
 *.aurapeaks
 *.dmp
 /build/Testing/
+
+# Python bytecode (tools/ are run, not built)
+__pycache__/
+*.pyc
