@@ -66,6 +66,14 @@ Notes that came from experience, not theory:
 * **No benchmarks as gates** — benchmarks are reported, not enforced, because a
   shared runner's timings are not stable enough to fail a build on. Performance
   gates require a pinned machine.
+* **No long runs on the push path** — but the opposite of "no long runs at all".
+  A criterion that can only be measured on one developer's workstation is a
+  criterion nobody else can check, so the soak campaign has its own workflow
+  (`soak.yml`, monthly + `workflow_dispatch`, Windows, Release) and *is* a gate:
+  the harness exits non-zero when resident memory grows past the limit. The one
+  thing the schedule cannot fix is the platform's own ceiling — a hosted job is
+  capped at six hours, so the campaign is five and the eight-hour figure comes
+  from running the same command for longer.
 
 ## Open questions
 

@@ -205,7 +205,8 @@ quietly.
 | Local soak, recording on | 60 s | 256 | 16 | 4 348 485 | 6.4 h | 37 → 37 MB | +0.00 MB/hour | **PASS** |
 | ASAN build | 9 s | 256 | 4 | 13 281 | 0.02 h | 56 → 56 MB | +0.00 MB/hour | **PASS** (no ASAN/UBSAN finding) |
 | Rehabilitation run, 2026-10-01 (`--record --tracks 12`) | 1 200 s | 256 | 12 | 95 837 769 | 5.9 days | 31 → 31 MB (min 30, max 31, final 31) | +0.00 MB/hour | **PASS** |
-| 8-hour campaign | not run yet | 256 | 16 | — | — | — | — | `bench/results/soak-8h.json` is where its JSON goes; see the note below |
+| Acceptance-flag run, 2026-10-01 (`--record --tracks 16 --rebuild-every 120`) | 2 280 s | 256 | 16 | 157 369 420 | 9.7 days | 37 → 37 MB (min 36, max 37, final 37) | +0.00 MB/hour | **PASS, interrupted at 38 of 480 minutes** (`"complete": false`) — flagged, counted, and 114 takes plus 1.3 M graph rebuilds into the run |
+| 8-hour campaign | automated by `.github/workflows/soak.yml` | 256 | 16 | — | — | — | — | the longest run a hosted runner allows is 5 hours (6-hour job cap); the 8-hour figure is that same command, run longer |
 
 The first two rows are the numbers the CI gate and a one-minute local run produce;
 they are the *floor* of what is checked automatically.
@@ -218,19 +219,29 @@ saw. 95.8 M blocks is about six days of audio, which is the useful property of t
 harness: a five-year-old laptop can put a multi-day session through the engine
 faster than a coffee break.
 
-The 8-hour row is the M5 acceptance campaign. It has **not** been run yet — it is
-the one number on this page that is a plan rather than a measurement, so it is marked
-as such instead of being estimated from the twenty-minute run. The extrapolation is
-the whole reason to run it: at +0.00 MB/hour the twenty-minute trend would predict
-+0.00 MB over eight hours, but this harness's own history (below) is proof that a
-leak can be invisible at one scale and obvious at another. What the twenty-minute run
-does establish is that the harness survives a twenty-minute session with recording on
-at a stable footprint, so the eight-hour run is a scheduling question, not a research
-one.
+The long campaign is the M5 acceptance run, and it is now **automated rather than
+promised** (`.github/workflows/soak.yml`, monthly and on demand, Windows, the same
+harness and the same flags). One honest difference is the clock: GitHub-hosted runners
+cap a single job at six hours, so the scheduled campaign is five hours and the
+eight-hour figure comes from running the identical command for longer — locally, or
+on any machine that can be left alone for a day. What the shorter runs establish is
+that a longer one is a scheduling question rather than a research question: the
+acceptance-flag run above held a 37 MB footprint through 157.4 M blocks (9.7 days of
+audio) with recording on and the graph rebuilt 1.3 M times, and it was stopped by its
+environment, not by a failure. It is listed as interrupted, with `"complete": false`,
+because that is what it is — and because an interrupted campaign that still leaves its
+trend behind is the reason the JSON is written on every sample instead of at the end.
 
-The 8-hour JSON is written with `"complete": false` after every sample and
-`"complete": true` at the end, so an interrupted campaign still leaves the trend
-behind instead of leaving nothing.
+The campaign is the one measurement on this page that a contributor other than the
+author can reproduce by pressing a button: **Actions → Soak → Run workflow**, with the
+duration as an input. It also fails the job on trend, not on thresholds that only a
+human reads: the harness exits non-zero above `--max-growth-mb-per-hour`, and the JSON
+is uploaded as an artifact either way so a drift is visible before it crosses the
+line.
+
+The JSON is written with `"complete": false` after every sample and `"complete": true`
+at the end, so an interrupted campaign still leaves the trend behind instead of leaving
+nothing.
 
 ### What the soak found
 

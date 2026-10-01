@@ -1,0 +1,119 @@
+# ============================================================================
+# AURA DAW - the soak campaign (M5's last acceptance item)
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The criterion is "resident memory grows by less than 2 MB per hour over eight
+# hours of continuous streaming". Two minutes of CI cannot prove it, and a number
+# that only ever comes out of one developer's workstation is a number nobody else
+# can check - which is exactly why this workflow exists instead of a paragraph in
+# PERFORMANCE.md promising a machine.
+#
+#   * monthly and on demand: the campaign is long, so it is not on the push path;
+#   * on windows-latest, because Windows is the platform that ships. A leak that
+#     only shows up in a Windows allocator would otherwise be found by users;
+#   * with the documented acceptance command (docs/PERFORMANCE.md), same harness
+#     and same flags, with one honest difference: GitHub-hosted runners cap a job
+#     at six hours, so the campaign here is five hours. The eight-hour figure is
+#     reached by running the identical command locally;
+#   * the harness never sleeps: five hours of wall clock at roughly 90x real time
+#     is on the order of 15,000 hours of audio streamed, recorded (takes opened,
+#     written and closed), edited and rebuilt, while resident memory is sampled
+#     once a minute and the trend is what decides pass or fail.
+#
+# The JSON report is uploaded whether the run passes or fails, so a slow drift is
+# visible as a trend before it crosses the limit and fails a build.
+# ============================================================================
+name: Soak
+
+on:
+  schedule:
+    # 04:17 UTC on the 1st of every month. Not on the hour: scheduled runs are
+    # queued, and the top of the hour is the busiest minute on the platform.
+    - cron: "17 4 1 * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Wall-clock minutes to stream (a hosted runner allows 360)"
+        required: false
+        default: "300"
+      tracks:
+        description: "Track count for the session"
+        required: false
+        default: "16"
+      growth_limit:
+        description: "Fail above this many MB of resident-memory growth per hour"
+        required: false
+        default: "2"
+
+# Deliberately not cancel-in-progress: a second dispatch must not kill a campaign
+# that has four hours of measurements in it.
+concurrency:
+  group: soak
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    name: Soak (Windows, Release)
+    runs-on: windows-latest
+    # 358, not 360: the artifact upload and the log copy still have to happen after
+    # the campaign, and a job killed by the platform loses them.
+    timeout-minutes: 358
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tests are off: the soak job builds exactly one binary, and the harness does
+      # not link Catch2. That also keeps the FetchContent step - the slowest part of
+      # a cold configure - out of a job whose budget belongs to the campaign.
+      - name: Configure
+        run: |
+          cmake -S . -B build-soak `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DAURA_BUILD_TESTS=OFF `
+            -DAURA_BUILD_BENCHMARKS=ON `
+            -DAURA_WARNINGS_AS_ERRORS=ON
+
+      - name: Build the soak harness
+        run: cmake --build build-soak --config Release -j 4 --target aura_soak
+
+      - name: Run the campaign
+        shell: pwsh
+        run: |
+          $minutes = if ("${{ inputs.minutes }}" -ne "") { "${{ inputs.minutes }}" } else { "300" }
+          $tracks = if ("${{ inputs.tracks }}" -ne "") { "${{ inputs.tracks }}" } else { "16" }
+          $limit = if ("${{ inputs.growth_limit }}" -ne "") { "${{ inputs.growth_limit }}" } else { "2" }
+          $work = Join-Path $env:RUNNER_TEMP "aura-soak"
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          Write-Host "soak: $minutes minutes, $tracks tracks, limit $limit MB/hour"
+          & .\build-soak\bench\Release\aura_soak.exe `
+              --minutes $minutes --tracks $tracks --record `
+              --rebuild-every 120 --interval 60 `
+              --max-growth-mb-per-hour $limit `
+              --json (Join-Path $work "soak.json") `
+              --workdir (Join-Path $work "work")
+          # The harness already exits non-zero when the trend fails; this keeps the
+          # job's result a single, legible line.
+          exit $LASTEXITCODE
+
+      - name: Report
+        if: always()
+        shell: pwsh
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP "aura-soak/soak.json"
+          if (Test-Path $report) {
+            Write-Host "::group::soak.json"
+            Get-Content $report
+            Write-Host "::endgroup::"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```json'
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value (Get-Content $report -Raw)
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+          } else {
+            Write-Warning "no soak.json: the campaign did not reach its first sample"
+          }
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-report
+          path: ${{ runner.temp }}/aura-soak/soak.json
+          if-no-files-found: warn
