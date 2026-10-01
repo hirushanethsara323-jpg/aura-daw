@@ -20,7 +20,7 @@ comment style.
 | Direction | Mechanism | Notes |
 |-----------|-----------|-------|
 | Control → audio | `EngineCommandQueue` (lock-free SPSC, 256 entries, POD commands) | drained at the top of every block, bounded work per block (32) |
-| Control → audio (plan swap) | `std::atomic<GraphPlan*>` published with release, old plan kept alive for a grace window (2 blocks) | the audio thread only *loads* a pointer |
+| Control → audio (plan swap) | `std::atomic<GraphPlan*>` published with release, old plan kept alive for a grace window (2 blocks *counted from its retirement*, not from engine start) | the audio thread only *loads* a pointer |
 | Audio → control | atomics only: position, peak/LUFS meters, CPU load, underruns, `bucketsReady`, recording state | snapshots are read at UI rate, no locks |
 | Audio → control (errors) | error counters + a small fixed-size record ring | never a heap-allocated log message from the callback |
 

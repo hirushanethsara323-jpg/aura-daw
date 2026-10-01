@@ -88,7 +88,7 @@ that is wrong is a bug.
 * `GraphPlan` is immutable once published: an ordered node list, the master node id
   and the total insert latency of the longest path.
 * Publishing is a release-store of a raw pointer; the previous plan is retained for
-  two processed blocks (the grace window) so no in-flight block can reference freed
+  two processed blocks *after that retirement* (the grace window) so no in-flight block can reference freed
   memory.
 * Per block, `GraphPlan::process` first clears every accumulator (nodes with
   incoming connections and the master), then processes in topological order. Source

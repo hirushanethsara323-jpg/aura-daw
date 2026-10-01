@@ -478,6 +478,47 @@ TEST_CASE("Stem rendering produces one file per track", "[engine][export]") {
         REQUIRE_FALSE(track->isSoloed());
 }
 
+TEST_CASE("A replaced plan outlives every block that could still use it", "[engine][realtime][regression]") {
+    // REGRESSION: the retired-plan grace window asked "has the engine processed two
+    // blocks since it started", not "two blocks since *this* plan was retired". Once
+    // a session had been running for a while, the next rebuild freed the plan it had
+    // just replaced while the audio thread could still be rendering with it - a
+    // use-after-free exactly when rebuilds arrive back to back (device change,
+    // plug-in scan). Retaining too long would be a leak; this test pins the policy.
+    Fixture fixture;
+    TestDevice device;
+    engine::AudioEngine engine;
+    engine::EngineSettings settings;
+    settings.sampleRate = 48000.0;
+    settings.bufferSize = 256;
+    engine.setProject(fixture.project.get());
+    REQUIRE(static_cast<bool>(engine.initialise(&device, settings)));
+    REQUIRE(static_cast<bool>(engine.rebuildGraph()));
+    // initialise() publishes a plan of its own, so that one is now retired and
+    // waiting out its grace window.
+    REQUIRE(engine.retiredPlanCount() == 1);
+
+    device.run(5); // long past the grace window: the old check would now free anything
+
+    // The rebuild releases the plan from initialise() (its window is over) and
+    // retires the one that was live - which must be kept, because no block has
+    // completed since.
+    REQUIRE(static_cast<bool>(engine.rebuildGraph()));
+    REQUIRE(engine.retiredPlanCount() == 1);
+
+    // A second rebuild immediately: still nothing has completed since the
+    // retirement, so both plans must stay. This is the assertion the old check
+    // fails - it only asked whether the engine had processed two blocks at all, and
+    // by now it certainly had.
+    REQUIRE(static_cast<bool>(engine.rebuildGraph()));
+    REQUIRE(engine.retiredPlanCount() == 2);
+
+    // Two blocks pass; the next rebuild may release both of them.
+    device.run(2);
+    REQUIRE(static_cast<bool>(engine.rebuildGraph()));
+    REQUIRE(engine.retiredPlanCount() == 1); // only the plan retired just now
+}
+
 TEST_CASE("The engine performs no allocations on the audio path", "[engine][realtime][regression]") {
     Fixture fixture;
     TestDevice device;

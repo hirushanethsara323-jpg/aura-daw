@@ -181,11 +181,31 @@ private:
     /// audio thread. The owning shared_ptrs live in activePlan_/retiredPlans_.
     std::atomic<graph::GraphPlan*> livePlan_{nullptr};
     std::shared_ptr<graph::GraphPlan> activePlan_;
-    std::vector<std::shared_ptr<graph::GraphPlan>> retiredPlans_;
+
+    /// A plan that has been replaced, plus the block counter as it stood when it
+    /// was retired. The stamp is the whole point: the grace window is "blocks that
+    /// completed *after* this plan was replaced", because the audio thread may have
+    /// loaded the pointer just before the swap and still be rendering its block.
+    /// Freeing by "the engine has processed a couple of blocks in its lifetime"
+    /// instead is a use-after-free under a rebuild storm (a device change, a
+    /// plug-in scan), which is exactly when rebuilds arrive back to back.
+    struct RetiredPlan {
+        std::shared_ptr<graph::GraphPlan> plan;
+        std::uint64_t retiredAtBlock = 0;
+    };
+    std::vector<RetiredPlan> retiredPlans_;
     std::atomic<std::uint64_t> blocksProcessedAtomic_{0};
 
     /// Frees plans that can no longer be in use (called from publishPlan()).
     void pruneRetiredPlans();
+
+public:
+    /// How many replaced plans are still held for the grace window. Diagnostics -
+    /// a count that keeps growing means the audio thread stopped calling back - and
+    /// the observable the grace-window test asserts on.
+    [[nodiscard]] std::size_t retiredPlanCount() const noexcept { return retiredPlans_.size(); }
+
+private:
 
     [[nodiscard]] graph::GraphPlan* livePlan() const noexcept {
         return livePlan_.load(std::memory_order_acquire);

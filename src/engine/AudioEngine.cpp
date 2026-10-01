@@ -112,22 +112,31 @@ void AudioEngine::setSettings(const EngineSettings& settings) {
 }
 
 void AudioEngine::pruneRetiredPlans() {
-    // A retired plan is safe to free once two full blocks have been processed
-    // since it was replaced: no block can still be holding the old pointer.
+    // A plan is safe to free once two blocks have *completed after it was retired*:
+    // the audio thread may have loaded the old pointer immediately before the swap
+    // and still be inside its block, and that block's own increment is what the
+    // counter reports. Unsigned subtraction so the comparison also survives a
+    // counter wrap. (The previous version asked whether the engine had processed two
+    // blocks in its lifetime, which freed a freshly retired plan during a rebuild
+    // storm while the audio thread was still rendering with it.)
     constexpr std::uint64_t kGraceBlocks = 2;
     const std::uint64_t blocks = blocksProcessedAtomic_.load(std::memory_order_acquire);
     retiredPlans_.erase(
         std::remove_if(retiredPlans_.begin(), retiredPlans_.end(),
-                       [blocks](const std::shared_ptr<graph::GraphPlan>&) {
-                           return blocks >= kGraceBlocks;
+                       [blocks](const RetiredPlan& entry) {
+                           return blocks - entry.retiredAtBlock >= kGraceBlocks;
                        }),
         retiredPlans_.end());
 }
 
 void AudioEngine::publishPlan(std::shared_ptr<graph::GraphPlan> plan) {
     pruneRetiredPlans();
-    if (activePlan_)
-        retiredPlans_.push_back(activePlan_); // kept alive for the grace window
+    if (activePlan_) {
+        // Stamp with the current block count: the grace window starts now, not at
+        // some earlier publish.
+        retiredPlans_.push_back(
+            RetiredPlan{activePlan_, blocksProcessedAtomic_.load(std::memory_order_acquire)});
+    }
     activePlan_ = std::move(plan);
     livePlan_.store(activePlan_.get(), std::memory_order_release);
 }
