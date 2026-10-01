@@ -213,20 +213,34 @@ TEST_CASE("Plug-in state is saved and restored through the chain", "[plugin][cha
 
 TEST_CASE("This build states honestly what it cannot host", "[plugin][honest]") {
     // AURA is GPL-3.0-or-later. VST 3.8's SDK is MIT and CLAP is MIT (both
-    // compatible); ASIO is GPLv3-or-proprietary. None of the SDKs are vendored,
-    // so the default build reports "not hostable" instead of faking success.
+    // compatible); ASIO is GPLv3-or-proprietary. None of the SDKs are vendored, so
+    // what a build can host is decided at configure time - and the answer has to be
+    // the truth in both directions: "not compiled in" for a format this build does
+    // not have, and an ordinary, descriptor-specific failure for one it does.
     REQUIRE(plugin::hostSupports(plugin::PluginFormat::Builtin));
-    REQUIRE_FALSE(plugin::PluginScanner::childProcessScanningAvailable());
 
-    plugin::PluginDescriptor vst3;
-    vst3.id = "VST3:test";
-    vst3.name = "Not Hostable";
-    vst3.format = plugin::PluginFormat::Vst3;
-    auto instance = plugin::instantiatePlugin(vst3, 48000.0, 256, 2);
-    REQUIRE_FALSE(instance.hasValue());
-    REQUIRE(instance.error().code == ErrorCode::NotImplemented);
-    // The error explains itself rather than saying "failed".
-    REQUIRE(instance.error().toString().find("VST3") != std::string::npos);
+    const plugin::PluginFormat otherFormats[] = {plugin::PluginFormat::Vst3,
+                                                 plugin::PluginFormat::Clap};
+    for (const plugin::PluginFormat format : otherFormats) {
+        plugin::PluginDescriptor descriptor;
+        descriptor.id = std::string(plugin::pluginFormatName(format)) + ":test";
+        descriptor.name = "Not Hostable";
+        descriptor.format = format;
 
+        auto instance = plugin::instantiatePlugin(descriptor, 48000.0, 256, 2);
+        REQUIRE_FALSE(instance.hasValue());
+        if (plugin::hostSupports(format)) {
+            // Compiled in: whatever went wrong is about this descriptor, not the build.
+            CHECK(instance.error().code != ErrorCode::NotImplemented);
+        } else {
+            // Not compiled in: say so, and name the format instead of saying "failed".
+            CHECK(instance.error().code == ErrorCode::NotImplemented);
+            CHECK(instance.error().toString().find(plugin::pluginFormatName(format)) !=
+                  std::string::npos);
+        }
+    }
+
+    // Where the scanner looks is a build-time decision too, and it is never empty:
+    // an empty list would silently mean "no plug-ins exist".
     REQUIRE_FALSE(plugin::PluginScanner::defaultSearchPaths().empty());
 }

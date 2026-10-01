@@ -28,7 +28,7 @@ offline renderer that reuses the live DSP graph rather than reimplementing it.
 | MIDI | messages, clips, quantise, recording bake, input routing with panic, original built-in poly synth, voice stealing |
 | Automation | Read/Touch/Write/Latch, lanes with curve shapes, gesture recorder with thinning, target ranges |
 | Commands | ~38 built-in commands with ids, categories and default shortcuts, undo/redo with transactions and bounded history |
-| Plug-ins | VST3 (MIT) / CLAP (MIT) host surface, database with search/favourites/blacklist, chains with order/bypass/latency, state save/restore; SDKs not vendored, absent SDK returns `NotImplemented` |
+| Plug-ins | **VST 3 hosting implemented** (`-DAURA_ENABLE_VST3=ON`, SDK fetched at a pinned tag and MIT-licensed): out-of-process scanning with timeouts and quarantine, parameters through the plug-in's own ranges, latency reporting, MIDI events, state round trip; database with search/favourites/blacklist, chains with order/bypass/latency. CLAP is not written; a build without the SDK says `NotImplemented` instead of failing obscurely |
 | Localisation | catalogue-based, English shipped, missing-key fallback, error-message translation |
 | Diagnostics | TRACE→FATAL structured logging, in-memory ring, CPU/xrun reporting, static real-time audit |
 

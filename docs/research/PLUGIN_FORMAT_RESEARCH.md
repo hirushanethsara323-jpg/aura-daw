@@ -38,7 +38,7 @@ usual answer:
    instantiate, chain, bypass, save state — nothing else in the tree includes a
    vendor header. When no SDK is configured, every entry point returns
    `ErrorCode::NotImplemented` with a message naming the build option that enables
-   it (`-DAURA_ENABLE_VST3=ON`, `AURA_VST3_SDK_DIR`), never a crash and never a
+   it (`-DAURA_ENABLE_VST3=ON`, SDK fetched at the pinned tag), never a crash and never a
    silent no-op. This is implemented and tested today.
 2. **The SDK is an optional build input, never vendored into the repository.**
    Binary releases may link it (MIT permits it); the source tree keeps it out so

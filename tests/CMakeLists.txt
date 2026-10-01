@@ -86,13 +86,71 @@ add_executable(aura_tests
   automation/AutomationTests.cpp
   timeline/TimelineTests.cpp
   plugin/PluginTests.cpp
+  plugin/ChildProcessTests.cpp
 )
 target_link_libraries(aura_tests PRIVATE Aura::Engine Aura::Dsp Aura::Core aura_test_support)
+
+# ---------------------------------------------------------------------------
+# VST 3 hosting tests + the real plug-in they load.
+#
+# Only when AURA_ENABLE_VST3 is on: without the SDK there is no adapter to test,
+# and the rest of the suite must still build and pass (which is the whole point of
+# the option being off by default). The plug-in is built here rather than taken
+# from the SDK's samples so the test subject is ours - if the host is wrong, the
+# fixture does not bend to hide it.
+# ---------------------------------------------------------------------------
+if(AURA_ENABLE_VST3)
+  target_sources(aura_tests PRIVATE plugin/Vst3HostingTests.cpp)
+  target_compile_definitions(aura_tests PRIVATE
+    AURA_TEST_VST3_BUNDLE="${CMAKE_CURRENT_BINARY_DIR}/vst3/AuraTestPlugin.vst3")
+
+  add_library(aura_test_vst3_plugin MODULE
+    plugin/vst3/AuraTestPlugin.cpp
+    ${vst3sdk_SOURCE_DIR}/public.sdk/source/vst/vstsinglecomponenteffect.cpp)
+  if(UNIX AND NOT APPLE)
+    # The format's Linux entry points (ModuleEntry/ModuleExit) come from the SDK's
+    # linuxmain.cpp; without them the loader refuses the bundle before it ever
+    # reaches GetPluginFactory.
+    target_sources(aura_test_vst3_plugin PRIVATE
+      ${vst3sdk_SOURCE_DIR}/public.sdk/source/main/linuxmain.cpp)
+  endif()
+  target_include_directories(aura_test_vst3_plugin SYSTEM PRIVATE ${vst3sdk_SOURCE_DIR})
+  target_link_libraries(aura_test_vst3_plugin PRIVATE sdk sdk_common)
+  set_target_properties(aura_test_vst3_plugin PROPERTIES
+    PREFIX "" SUFFIX ".so" OUTPUT_NAME "AuraTestPlugin")
+
+  if(UNIX AND NOT APPLE)
+    # Linux: a VST 3 bundle is <name>.vst3/Contents/<machine>-linux/<name>.so and
+    # the SDK's loader refuses anything else, so the build assembles the layout
+    # instead of leaving a bare .so that cannot be loaded by the format it claims.
+    set(AURA_VST3_BUNDLE_LIBDIR "${CMAKE_SYSTEM_PROCESSOR}-linux")
+    set(AURA_VST3_BUNDLE_FILE
+        "${CMAKE_CURRENT_BINARY_DIR}/vst3/AuraTestPlugin.vst3/Contents/${AURA_VST3_BUNDLE_LIBDIR}/AuraTestPlugin.so")
+    add_custom_command(TARGET aura_test_vst3_plugin POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+              "${CMAKE_CURRENT_BINARY_DIR}/vst3/AuraTestPlugin.vst3/Contents/${AURA_VST3_BUNDLE_LIBDIR}"
+      COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:aura_test_vst3_plugin>
+              "${AURA_VST3_BUNDLE_FILE}"
+      COMMENT "Assembling the AuraTestPlugin VST 3 bundle")
+    # The tests load a real bundle from disk; building the tests must not race it.
+    add_dependencies(aura_tests aura_test_vst3_plugin)
+    add_dependencies(aura_scan_host aura_test_vst3_plugin)
+  else()
+    message(WARNING
+      "AURA_ENABLE_VST3=ON but the test bundle layout is only implemented for "
+      "Linux; the VST 3 tests will not be able to load the fixture on this platform.")
+  endif()
+endif()
 
 # The portable fuzz smoke test reuses the seeds and the temporary-file helper from
 # fuzz/FuzzSupport.hpp so the deterministic test and the libFuzzer targets start
 # from the same inputs (a bug found by one reproduces in the other).
-target_include_directories(aura_tests PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(aura_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src/plugin)
+if(AURA_ENABLE_VST3)
+  # ChildProcessTests drives the real scanner helper, which is a separate binary.
+  target_include_directories(aura_scan_host PRIVATE ${CMAKE_SOURCE_DIR}/src/plugin)
+  add_dependencies(aura_tests aura_scan_host)
+endif()
 
 include(Catch)
 catch_discover_tests(aura_tests

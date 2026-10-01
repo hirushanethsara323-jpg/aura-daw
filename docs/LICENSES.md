@@ -36,7 +36,7 @@ dependency — a deliberate consequence of ADR-0005 (own device layer) and ADR-0
 
 | Dependency | Licence | Enabled by | Notes |
 |------------|---------|-----------|-------|
-| **VST3 SDK** | **MIT** since VST 3.8 (29 Oct 2025) | `AURA_ENABLE_VST3=ON` + `AURA_VST3_SDK_DIR` | MIT permits binary distribution with the notice retained; the SDK is *not* committed to the repository |
+| **VST 3 SDK** | **MIT** since VST 3.8 (29 Oct 2025); AURA pins `v3.8.1_build_84` | `AURA_ENABLE_VST3=ON` (fetched by `FetchContent` at the pinned tag, shallow, four submodules) or `-DFETCHCONTENT_SOURCE_DIR_VST3SDK=<dir>` for a local checkout | MIT permits binary distribution with the notice retained; the SDK is *not* committed to the repository. Four SDK sources a host needs but the SDK's libraries do not contain (`plugprovider.cpp`, `memorystream.cpp`, the platform module loader) are compiled into `aura_vst3_sdk_bridge`; see [`PLUGIN_HOST.md`](PLUGIN_HOST.md) |
 | **CLAP** | **MIT** | (M7) | pure C ABI, no platform dependency |
 | **ASIO SDK** | **GPLv3 or proprietary** since Oct 2025 | `AURA_ENABLE_ASIO=ON` + `AURA_ASIO_SDK_DIR` | GPLv3 is compatible with this project's licence; before Oct 2025 this required a signed agreement, which is why older advice says it is impossible |
 | **JUCE** | **AGPLv3 or commercial** | `AURA_WITH_JUCE=ON` (not default) | AGPLv3 is *stronger* than GPL-3.0-or-later: builds that enable it must state that they include AGPLv3 code. The default build and CI prove the tree works with JUCE absent (ADR-0006) |
@@ -56,7 +56,9 @@ dependency — a deliberate consequence of ADR-0005 (own device layer) and ADR-0
 
 1. Third-party notices required by a licence (MIT text for VST3, BSL-1.0 for Catch2)
    are collected in the installer's `licenses/` directory and listed in the About
-   box.
+   box. A build with `AURA_ENABLE_VST3=ON` links Steinberg's MIT-licensed SDK, so its
+   notice ships with any binary built that way - the source is fetched at build time,
+   which keeps this repository clean but does not remove the notice requirement.
 2. No proprietary code is copied, and no commercial DAW is reverse-engineered; UI
    layout, icons, themes and the built-in instrument are original work.
 3. Copyleft compatibility is checked *before* a dependency is added, not after a

@@ -38,7 +38,9 @@ Question answered: *does this component behave the way its header says?*
 | Commands | `tests/commands/CommandsTests.cpp` | registry and ids, engine-action hook, search ranking, undo/redo of clip state, transaction semantics, redo-branch invalidation, bounded history |
 | Automation | `tests/automation/AutomationTests.cpp` | lane interpolation and curve shapes, `sampleInto`, recorder thinning, target ranges (linear/log) |
 | Timeline | `tests/timeline/TimelineTests.cpp` | every snap mode including markers and zero crossings, tempo-aware grid, view-state zoom limits, marker navigation |
-| Plugin | `tests/plugin/PluginTests.cpp` | database persistence/search/favourites/blacklist, chain order/bypass/latency, failed-instance skip, state blobs, VST3 → `NotImplemented` when unbuilt |
+| Plugin | `tests/plugin/PluginTests.cpp` | database persistence/search/favourites/blacklist, chain order/bypass/latency, failed-instance skip, state blobs, and the honest "not compiled in" contract for formats this build does not host |
+| Plugin (VST 3) | `tests/plugin/Vst3HostingTests.cpp`, `tests/plugin/vst3/AuraTestPlugin.cpp` | only in a `-DAURA_ENABLE_VST3=ON` build: a real bundle is scanned, loaded, processed (parameters reach `ProcessData`, the audio obeys the reported latency), notes are delivered, state round-trips, and a bundle that hangs or crashes is quarantined by the child-process scanner |
+| Child process | `tests/plugin/ChildProcessTests.cpp` | the supervisor the scanner stands on: timeouts, crash reporting, missing executables, captured output |
 
 ### 2. Integration tests
 
