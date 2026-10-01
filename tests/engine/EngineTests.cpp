@@ -205,6 +205,77 @@ TEST_CASE("A send plays at the level it is set to", "[engine][sends][regression]
     REQUIRE(renderPeak(1.0f) == Approx(1.0f).margin(0.02f));  // dry + unity return
 }
 
+TEST_CASE("A pre-fader send ignores the fader and the mute", "[engine][sends]") {
+    // The cue-mix property, measured on the engine rather than on the graph: the
+    // artist's headphone feed must not change when the control-room fader moves or
+    // the track is muted. Both are the same mechanism (a gain ramp on the source
+    // node), so if the tap is taken before the fader it survives both.
+    const auto renderReturnPeak = [](bool preFader, float volumeDb, bool muted) {
+        Fixture fixture;
+        audio::Track* track = fixture.project->mixer().findTrack(fixture.trackId);
+        REQUIRE(track != nullptr);
+
+        // The track's own output goes to a muted "Room" bus, so the only thing that
+        // can reach the master is the cue send. (Measuring the master while the
+        // track also routes to it directly measures the direct path - the send is
+        // part of the sum, not the whole of it.)
+        const audio::TrackId roomId = fixture.project->mixer().createTrack(audio::TrackKind::Bus, "Room");
+        audio::Track* room = fixture.project->mixer().findTrack(roomId);
+        REQUIRE(room != nullptr);
+        room->setMuted(true);
+        track->setOutput(roomId);
+
+        const audio::TrackId busId = fixture.project->mixer().createTrack(audio::TrackKind::Bus, "Cue");
+        audio::Track* bus = fixture.project->mixer().findTrack(busId);
+        REQUIRE(bus != nullptr);
+        REQUIRE(bus->id() != roomId);
+
+        audio::Send send;
+        send.destination = busId;
+        send.level = 1.0f;
+        send.preFader = preFader;
+        send.enabled = true;
+        track->addSend(send);
+        track->setVolumeDb(volumeDb);
+        if (muted)
+            track->setMuted(true);
+
+        TestDevice device;
+        engine::AudioEngine engine;
+        engine::EngineSettings settings;
+        settings.sampleRate = 48000.0;
+        settings.bufferSize = 256;
+        engine.setProject(fixture.project.get());
+        REQUIRE(static_cast<bool>(engine.initialise(&device, settings)));
+        REQUIRE(static_cast<bool>(engine.rebuildGraph()));
+        REQUIRE(static_cast<bool>(engine.currentPlan()->find(track->graphNodeId())->preFaderTapRequired()) ==
+                preFader);
+
+        engine.transport().play();
+        float settling = 0.0f;
+        device.run(16, &settling); // fader/mute ramps settle in ~24 ms
+        float peak = 0.0f;
+        device.run(16, &peak);
+        return peak;
+    };
+
+    // Post-fader: the send follows the fader (-6 dB = half) and dies with a mute.
+    INFO("post: unity " << renderReturnPeak(false, 0.0f, false)
+                        << ", -6 dB " << renderReturnPeak(false, -6.0f, false)
+                        << ", muted " << renderReturnPeak(false, 0.0f, true));
+    REQUIRE(renderReturnPeak(false, 0.0f, false) == Approx(0.5f).margin(0.02f));
+    REQUIRE(renderReturnPeak(false, -6.0f, false) == Approx(0.25f).margin(0.02f));
+    REQUIRE(renderReturnPeak(false, 0.0f, true) < 0.01f);
+
+    // Pre-fader: the same send is untouched by either.
+    INFO("pre: unity " << renderReturnPeak(true, 0.0f, false)
+                       << ", -6 dB " << renderReturnPeak(true, -6.0f, false)
+                       << ", muted " << renderReturnPeak(true, 0.0f, true));
+    REQUIRE(renderReturnPeak(true, 0.0f, false) == Approx(0.5f).margin(0.02f));
+    REQUIRE(renderReturnPeak(true, -6.0f, false) == Approx(0.5f).margin(0.02f));
+    REQUIRE(renderReturnPeak(true, 0.0f, true) == Approx(0.5f).margin(0.02f));
+}
+
 TEST_CASE("The engine renders project audio through the graph", "[engine]") {
     Fixture fixture;
     TestDevice device;

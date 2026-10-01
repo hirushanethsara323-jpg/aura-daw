@@ -80,6 +80,23 @@ void GraphNode::prepare(double sampleRate, int maxBlockSize, int numChannels) {
     for (std::size_t i = 0; i < inputEdges_.size(); ++i)
         edgeDelays_[i].prepare(inputEdges_[i].compensationSamples);
 
+    // The pre-fader tap, when this node feeds a pre-fader edge. Allocated here (the
+    // control thread) and reused forever; a node without pre-fader sends keeps an
+    // empty buffer and pays one bool test per block.
+    if (preFaderTapRequired_) {
+        preFaderStorage_.assign(static_cast<std::size_t>(numChannels_) * static_cast<std::size_t>(maxBlockSize_),
+                                0.0f);
+        preFaderPointers_.resize(static_cast<std::size_t>(numChannels_));
+        for (int channel = 0; channel < numChannels_; ++channel) {
+            preFaderPointers_[static_cast<std::size_t>(channel)] =
+                preFaderStorage_.data() +
+                static_cast<std::size_t>(channel) * static_cast<std::size_t>(maxBlockSize_);
+        }
+    } else {
+        preFaderStorage_.clear();
+        preFaderPointers_.clear();
+    }
+
     // A source-indexed view of the edge table, sorted once here so that sumFrom()
     // can binary-search it on the audio thread. A linear scan would be O(inputs)
     // per incoming connection - for a master fed by 48 tracks that is 2,304 id
@@ -151,6 +168,33 @@ void GraphNode::applyGainSmoothing(int numFrames) noexcept {
     }
 }
 
+void GraphNode::capturePreFaderTap(int numFrames) noexcept {
+    if (!prepared_ || preFaderPointers_.empty())
+        return;
+    const int frames = std::min(numFrames, maxBlockSize_);
+    if (frames <= 0)
+        return;
+    for (int channel = 0; channel < numChannels_; ++channel) {
+        std::memcpy(preFaderStorage_.data() +
+                        static_cast<std::size_t>(channel) * static_cast<std::size_t>(maxBlockSize_),
+                    channelPointers_[static_cast<std::size_t>(channel)],
+                    static_cast<std::size_t>(frames) * sizeof(float));
+    }
+}
+
+void GraphNode::clearPreFaderTap(int numFrames) noexcept {
+    if (preFaderPointers_.empty())
+        return;
+    const int frames = std::min(numFrames, maxBlockSize_);
+    if (frames <= 0)
+        return;
+    for (int channel = 0; channel < numChannels_; ++channel) {
+        std::fill_n(preFaderStorage_.data() +
+                        static_cast<std::size_t>(channel) * static_cast<std::size_t>(maxBlockSize_),
+                    frames, 0.0f);
+    }
+}
+
 void GraphNode::sumFrom(const GraphNode& source, int numFrames) noexcept {
     if (!prepared_ || !source.prepared_)
         return;
@@ -174,18 +218,39 @@ void GraphNode::sumFrom(const GraphNode& source, int numFrames) noexcept {
             // running a block of multiply-accumulate into silence.
             if (edge.gain == 0.0f)
                 return;
+
+            // Pre-fader edges read the tap; everything else reads the output. A
+            // pre-fader edge whose source has no tap (unprepared, or the source was
+            // rebuilt without it) reads nothing rather than the wrong signal.
+            const float* const* input = source.channelPointers();
+            if (edge.preFader) {
+                if (!source.hasPreFaderTap())
+                    return;
+                input = source.preFaderPointers();
+            }
+
             const int delay = edge.compensationSamples;
             if (delay > 0 || edge.gain != 1.0f) {
                 for (int channel = 0; channel < channels; ++channel) {
                     edgeDelays_[found->index].sumDelayed(
-                        source.channelPointers()[channel],
-                        channelPointers_[static_cast<std::size_t>(channel)], frames, delay,
-                        edge.gain);
+                        input[channel], channelPointers_[static_cast<std::size_t>(channel)], frames,
+                        delay, edge.gain);
                 }
                 if (frames > 0)
                     inputActive_ = true;
                 return;
             }
+
+            // Plain unity path: same loop, now with the edge's tap choice.
+            for (int channel = 0; channel < channels; ++channel) {
+                float* destination = channelPointers_[static_cast<std::size_t>(channel)];
+                const float* sourceChannel = input[channel];
+                for (int i = 0; i < frames; ++i)
+                    destination[i] += sourceChannel[i];
+            }
+            if (frames > 0)
+                inputActive_ = true;
+            return;
         }
     }
 
@@ -265,20 +330,34 @@ void GraphPlan::process(int numFrames, const dsp::ProcessContext& context,
 
         if (!active && !node->inserts().anyActive()) {
             // Silent and no tail: clear outputs so a previous block's audio is
-            // never recycled, and skip the DSP entirely.
+            // never recycled, and skip the DSP entirely. The pre-fader tap is
+            // cleared too, or a cue mix would keep hearing the last block the
+            // track produced.
             node->clear(numFrames);
+            node->clearPreFaderTap(numFrames);
             continue;
         }
 
-        // Fader before the insert chain (the standard DAW model), ramped so
-        // automation and mute changes never click. A `muted_` node is a hard cut
-        // used by renderers/tests; the mixer expresses mute as a ramp to zero so
-        // it fades instead of popping.
-        node->applyGainSmoothing(numFrames);
-
+        // Inserts first, then the fader. The fader is the last thing before the
+        // output, so riding it cannot change what the inserts do - the classic
+        // reason for this order is that the same move on the fader must not
+        // change how hard a saturator is driven or where a compressor works.
+        // (This engine had it the other way round: the inserts were fed from the
+        // post-fader signal, so a fader move re-voiced every non-linear insert.)
         dsp::AudioBlockView block = node->mutableBlock();
         block.numFrames = numFrames;
         node->inserts().process(block, context);
+
+        // Pre-fader tap: the signal after the inserts, before the fader, pan and
+        // mute. This is what a pre-fader send reads.
+        if (node->preFaderTapRequired())
+            node->capturePreFaderTap(numFrames);
+
+        // Fader last, ramped so automation and mute changes never click. A
+        // `muted_` node is a hard cut used by renderers/tests; the mixer expresses
+        // mute as a ramp to zero so it fades instead of popping - and either way a
+        // pre-fader send is unaffected, which is the point of a cue mix.
+        node->applyGainSmoothing(numFrames);
 
         // Route to destinations.
         for (const NodeId destinationId : node->destinations()) {
@@ -316,7 +395,7 @@ GraphNode* GraphBuilder::find(NodeId id) const noexcept {
     return nullptr;
 }
 
-void GraphBuilder::connect(NodeId source, NodeId destination, float gain) {
+void GraphBuilder::connect(NodeId source, NodeId destination, float gain, bool preFader) {
     if (source == kInvalidNodeId || destination == kInvalidNodeId || source == destination)
         return;
     if (!(gain > 0.0f))
@@ -332,11 +411,12 @@ void GraphBuilder::connect(NodeId source, NodeId destination, float gain) {
     for (Connection& connection : connections_) {
         if (connection.source == source && connection.destination == destination) {
             connection.gain = std::min(1.0f, connection.gain + gain);
+            connection.preFader = connection.preFader && preFader; // two taps that disagree = the louder one
             return; // the edge table is rebuilt from this list anyway
         }
     }
 
-    connections_.push_back(Connection{source, destination, gain});
+    connections_.push_back(Connection{source, destination, gain, preFader});
     if (GraphNode* node = find(source))
         node->addDestination(destination);
 }
@@ -370,6 +450,15 @@ std::shared_ptr<GraphPlan> GraphBuilder::build(std::string* outError) const {
         // which nodes must be cleared at the start of every block.
         if (nodes_[d])
             nodes_[d]->setIncomingConnections(nodes_[d]->incomingConnections() + 1);
+    }
+
+    // A source with a pre-fader edge has to keep a second buffer: tell it before
+    // prepare() so the allocation happens once, on the control thread.
+    for (const Connection& connection : connections_) {
+        if (!connection.preFader)
+            continue;
+        if (GraphNode* source = plan->find(connection.source))
+            source->setPreFaderTapRequired(true);
     }
 
     // Deterministic order: process nodes in creation order when several are
@@ -450,7 +539,7 @@ std::shared_ptr<GraphPlan> GraphBuilder::build(std::string* outError) const {
                 continue;
             const int latency = latencyOf(connection.source);
             latestInput = std::max(latestInput, latency);
-            edges.push_back(InputEdge{connection.source, 0, connection.gain});
+            edges.push_back(InputEdge{connection.source, 0, connection.gain, connection.preFader});
         }
         for (InputEdge& edge : edges) {
             edge.compensationSamples =

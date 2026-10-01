@@ -96,6 +96,11 @@ that is wrong is a bug.
   incoming connections and the master), then processes in topological order. Source
   nodes are deliberately *not* cleared there — the engine has already filled them
   with this block's audio.
+* Each node runs **inserts first, then its fader/pan/mute**, with the pre-fader tap
+  captured in between. The fader is the last thing before the output, so riding it
+  cannot change what the inserts do — otherwise the same fader move would re-voice
+  every non-linear insert (drive a saturator harder, push a compressor over its
+  threshold) and the mix would no longer be the mix that was saved.
 * A node is skipped only when it has no input **and** no tail
   (`Processor::hasTail()`), which is what makes a 24-track session cheap without
   truncating a reverb tail.
@@ -109,10 +114,16 @@ the master at unity and a reverb return at -12 dB without an extra node, buffer 
 latency-accounting participant. A zero-level send is skipped entirely — it carries
 nothing and must not touch a delay ring.
 
-Honest gap: every send currently taps the signal **post-fader**, because the tap point
-is the node's output. `Send::preFader` is stored and not yet honoured; a pre-fader tap
-needs the node to keep the signal before its fader, which is a bigger change than a
-gain on an edge.
+A send has two independent properties — its level (the edge gain) and its **tap
+point**. A post-fader send reads the source's output; a pre-fader send reads the
+source's *tap*: the signal after its inserts but before its fader, pan and mute. The
+tap is a per-connection choice because the same source feeds the master post-fader and
+a cue mix pre-fader — which is the entire point of a cue mix: the artist's headphones
+must not go silent when the control room fader is pulled down.
+
+The tap buffer exists only for nodes that actually feed a pre-fader edge (allocated in
+`prepare()`, one planar buffer), so a session without pre-fader sends pays one bool
+test per block and no memory.
 
 Solo is resolved once per block (`Mixer::resolveSoloState`) and applied by the plan, so
 a soloed bus keeps its sources audible and an unsoloed track is muted without the graph

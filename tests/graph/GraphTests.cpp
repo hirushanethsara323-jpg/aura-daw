@@ -10,9 +10,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <memory>
 #include <chrono>
 #include <thread>
 
+#include "aura/dsp/Compressor.hpp"
 #include "aura/dsp/GainProcessor.hpp"
 #include "aura/graph/AudioGraph.hpp"
 #include "aura/graph/SampleStream.hpp"
@@ -164,6 +166,116 @@ TEST_CASE("An edge gain scales the connection it belongs to", "[graph][sends]") 
         mutedPlan->process(64, context, false);
         REQUIRE(readNode(*mutedPlan->find(mutedMaster), 0, 63) == Approx(0.5f).margin(1e-6f));
     }
+}
+
+TEST_CASE("A pre-fader edge reads the tap, not the fader", "[graph][sends]") {
+    // The cue-mix property: the same source feeds the master through its fader and a
+    // cue bus before it. Moving the fader must change only the first.
+    graph::GraphBuilder builder;
+    const auto masterId = builder.createNode(graph::NodeKind::Master, "Master");
+    const auto cueId = builder.createNode(graph::NodeKind::Bus, "Cue");
+    const auto trackId = builder.createNode(graph::NodeKind::Track, "Vocal");
+    builder.connect(trackId, masterId, 1.0f, /*preFader=*/false);
+    builder.connect(trackId, cueId, 1.0f, /*preFader=*/true);
+    builder.connect(cueId, masterId);
+    builder.setMasterNode(masterId);
+
+    auto plan = builder.build();
+    REQUIRE(plan != nullptr);
+
+    // An insert with a known gain, so the test can tell *where* the tap sits: the
+    // cue bus must see the insert (post-insert tap) but not the fader.
+    auto insertGain = std::make_unique<dsp::GainProcessor>();
+    insertGain->setGain(0.25f);
+    plan->find(trackId)->inserts().add(insertGain.get());
+
+    for (const auto& node : plan->nodes())
+        node->prepare(48000.0, 128, 2);
+
+    auto* source = plan->find(trackId);
+    auto* cue = plan->find(cueId);
+    auto* master = plan->find(masterId);
+    REQUIRE(source != nullptr);
+    REQUIRE(cue != nullptr);
+    REQUIRE(master != nullptr);
+    REQUIRE(source->preFaderTapRequired());
+    REQUIRE(source->hasPreFaderTap());
+
+    source->setGain(0.5f); // the fader, applied at the end of the node's chain
+
+    dsp::ProcessContext context;
+    context.sampleRate = 48000.0;
+
+    // Run enough blocks for the ramps to settle, then measure. The ramped fader is
+    // deliberate (no clicks), so the first blocks are not the steady state.
+    for (int block = 0; block < 40; ++block) {
+        fillConstant(*source, 128, 0.5f);
+        plan->process(128, context, false);
+    }
+    const float tap = readNode(*cue, 0, 127);
+    INFO("master " << readNode(*master, 0, 127) << ", tap " << tap);
+    // The tap is post-insert, pre-fader: 0.5 source * 0.25 insert = 0.125, and the
+    // fader must not appear in it.
+    REQUIRE(tap == Approx(0.125f).margin(1e-3f));
+    // The master sums both routes: post-fader 0.5 * 0.25 * 0.5 = 0.0625, plus the
+    // tap's 0.125 = 0.1875. A tap taken before the insert would make this 0.5625; a
+    // tap taken after the fader (i.e. not a pre-fader send at all) would make it
+    // 0.125.
+    REQUIRE(readNode(*master, 0, 127) == Approx(0.1875f).margin(1e-3f));
+}
+
+TEST_CASE("The fader is applied after the inserts, so it cannot re-voice them",
+          "[graph][regression]") {
+    // REGRESSION: the fader used to be applied before the insert chain, so moving it
+    // changed what the inserts saw. For a linear insert that is invisible; for a
+    // non-linear one it rewrites the sound - a saturator driven harder, a compressor
+    // crossing its threshold. The check is arithmetic: halving the fader has to halve
+    // the output exactly, which is only true if the insert saw the same input.
+    const auto renderWithFader = [](float fader) {
+        graph::GraphBuilder builder;
+        const auto masterId = builder.createNode(graph::NodeKind::Master, "Master");
+        const auto trackId = builder.createNode(graph::NodeKind::Track, "Bass");
+        builder.connect(trackId, masterId);
+        builder.setMasterNode(masterId);
+
+        auto plan = builder.build();
+        REQUIRE(plan != nullptr);
+
+        auto compressor = std::make_unique<dsp::Compressor>();
+        dsp::CompressorSettings settings;
+        settings.thresholdDb = -30.0f; // well into gain reduction at these levels
+        settings.ratio = 8.0f;
+        settings.attackMs = 0.5f;
+        settings.releaseMs = 50.0f;
+        settings.autoMakeup = false;
+        compressor->setSettings(settings);
+        plan->find(trackId)->inserts().add(compressor.get());
+
+        for (const auto& node : plan->nodes())
+            node->prepare(48000.0, 128, 2);
+
+        auto* source = plan->find(trackId);
+        auto* master = plan->find(masterId);
+        REQUIRE(source != nullptr);
+        REQUIRE(master != nullptr);
+        source->setGain(fader);
+
+        dsp::ProcessContext context;
+        context.sampleRate = 48000.0;
+        for (int block = 0; block < 64; ++block) { // let the compressor and the ramp settle
+            fillConstant(*source, 128, 0.5f);
+            plan->process(128, context, false);
+        }
+        return readNode(*master, 0, 127);
+    };
+
+    const float unity = renderWithFader(1.0f);
+    const float halved = renderWithFader(0.5f);
+    INFO("unity " << unity << ", halved " << halved);
+    REQUIRE(unity > 0.0f);
+    // Exactly half. With the fader in front of the compressor the second render is
+    // louder than this: the compressor would be working on a quieter signal.
+    REQUIRE(halved == Approx(unity * 0.5f).epsilon(0.001f));
 }
 
 TEST_CASE("Topological order puts sources before destinations", "[graph]") {

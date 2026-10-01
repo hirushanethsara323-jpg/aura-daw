@@ -73,6 +73,13 @@ struct InputEdge {
     /// connection; a send's level for a send. It belongs on the connection
     /// because one source can feed several destinations at different levels.
     float gain = 1.0f;
+    /// Read the source's *pre-fader* tap instead of its output: the signal after
+    /// the source's inserts but before its fader, pan and mute. This is what a
+    /// pre-fader send means (a headphone mix must not follow the control-room
+    /// fade), and it is why the tap point is a property of the connection rather
+    /// than of the source: the same source feeds the master post-fader and a cue
+    /// mix pre-fader.
+    bool preFader = false;
 };
 
 /// A graph node. Buffers are owned by the graph (planar, max block size), so
@@ -131,6 +138,27 @@ public:
     [[nodiscard]] bool hasCompensation() const noexcept { return compensationEdgeCount_ > 0; }
     /// Copies `source` into this node's buffers.
     void copyFrom(const GraphNode& source, int numFrames) noexcept;
+
+    // -- Pre-fader tap ------------------------------------------------------
+    // A node that feeds at least one pre-fader edge keeps a second buffer holding
+    // its signal at the tap point (after its inserts, before its fader/pan/mute).
+    // The buffer is allocated in prepare() and only for nodes that need it, so a
+    // session without pre-fader sends pays nothing but a bool test per block.
+
+    /// Marks this node as needing a pre-fader tap. Control thread.
+    void setPreFaderTapRequired(bool required) noexcept { preFaderTapRequired_ = required; }
+    [[nodiscard]] bool preFaderTapRequired() const noexcept { return preFaderTapRequired_; }
+    /// True once the tap buffer exists (required *and* prepared).
+    [[nodiscard]] bool hasPreFaderTap() const noexcept { return !preFaderPointers_.empty(); }
+    /// The tap's channel pointers, for a destination reading a pre-fader edge.
+    [[nodiscard]] const float* const* preFaderPointers() const noexcept {
+        return preFaderPointers_.data();
+    }
+    /// Snapshots the current buffer into the tap (called after the inserts).
+    void capturePreFaderTap(int numFrames) noexcept;
+    /// Silences the tap: a node that produced nothing must not keep feeding stale
+    /// audio to its pre-fader sends.
+    void clearPreFaderTap(int numFrames) noexcept;
     /// Fills this node's buffers with silence.
     void clear(int numFrames) noexcept;
 
@@ -255,6 +283,11 @@ private:
     std::vector<float*> channelPointers_;   ///< stable pointer array
     dsp::AudioBlockView block_{};
 
+    /// Pre-fader tap buffer, allocated only when an edge needs it.
+    std::vector<float> preFaderStorage_;
+    std::vector<const float*> preFaderPointers_;
+    bool preFaderTapRequired_ = false;
+
     float gain_ = 1.0f;
     float targetGainL_ = 1.0f;
     float targetGainR_ = 1.0f;
@@ -345,7 +378,9 @@ public:
     /// pair twice adds the gains instead of adding a second edge: two paths with
     /// identical endpoints sum, and a duplicate edge would otherwise be summed
     /// twice and inflate the in-degree that drives the topological order.
-    void connect(NodeId source, NodeId destination, float gain = 1.0f);
+    /// `gain` is the edge's linear sum gain (a send's level); `preFader` makes the
+    /// destination read the source's pre-fader tap instead of its output.
+    void connect(NodeId source, NodeId destination, float gain = 1.0f, bool preFader = false);
     void setMasterNode(NodeId id) noexcept { masterNode_ = id; }
 
     /// Delay compensation on/off (mirrors EngineSettings::delayCompensation).
@@ -370,6 +405,7 @@ private:
         NodeId source = kInvalidNodeId;
         NodeId destination = kInvalidNodeId;
         float gain = 1.0f;
+        bool preFader = false;
     };
 
     std::vector<std::shared_ptr<GraphNode>> nodes_;
