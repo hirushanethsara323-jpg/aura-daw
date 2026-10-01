@@ -75,6 +75,7 @@ Each of these exists because it actually failed:
 | "Delay produces the requested delay time" | smoothers ramped in from zero and swallowed the first echoes |
 | "A node keeps every destination it is connected to (fan-out)" | `GraphBuilder::connect()` *replaced* a node's destination list, so attaching a send deleted the track's own output: the dry signal left the mix (measured: master peak 0.0001 where 0.5 was expected) |
 | "A track with a send still plays through its own output" | the same bug seen from the mix: the track went silent once a send was dialled in |
+| "A note held across a window boundary gets exactly one note-off" | `collectEvents()` had two conditions emitting the same note-off, so a held note was turned off twice — and the stale off collides with a re-trigger of that pitch |
 | "A replaced plan outlives every block that could still use it" | the retired-plan grace window asked whether the engine had processed two blocks *in its lifetime*, so a rebuild freed the plan the audio thread was still rendering with (use-after-free on a device change or plug-in scan) |
 | "Offline render is sample-identical to the live path" | export could quietly grow its own half of the signal chain; peaks agreed while samples did not (the test compares 10 240 samples of a session with a reverb, a send and the master limiter: worst difference 0) |
 | "A send plays at the level it is set to" | `Send::level` was stored, documented and never applied — every send played at unity |

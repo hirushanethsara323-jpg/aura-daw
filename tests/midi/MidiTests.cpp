@@ -91,6 +91,36 @@ TEST_CASE("MIDI clips keep notes sorted and expose their range", "[midi][clip]")
     REQUIRE(full.front().timestampTicks <= full.back().timestampTicks);
 }
 
+TEST_CASE("A note held across a window boundary gets exactly one note-off",
+          "[midi][clip][regression]") {
+    // REGRESSION: collectEvents() had two conditions that both emitted the note-off
+    // for a note that started before the window, so every held note was turned off
+    // twice. The audible failure is not the duplicate itself but the collision: the
+    // stale off sits at the same tick as a re-trigger of that pitch, so a synth that
+    // counts active voices per pitch cuts the new note short.
+    midi::MidiClip clip(1, "Pad");
+    midi::Note note;
+    note.pitch = 60;
+    note.channel = 0;
+    note.startTicks = 0;
+    note.lengthTicks = 480; // ends inside the window below
+    clip.addNote(note);
+
+    std::vector<midi::Message> events;
+    clip.collectEvents(240, 960, events); // the window starts after the note-on
+
+    int noteOns = 0;
+    int noteOffs = 0;
+    for (const auto& message : events) {
+        if (message.type == midi::Message::Type::NoteOn)
+            ++noteOns;
+        if (message.type == midi::Message::Type::NoteOff)
+            ++noteOffs;
+    }
+    REQUIRE(noteOns == 0); // it started before the window, so no note-on here
+    REQUIRE(noteOffs == 1);
+}
+
 TEST_CASE("Recording notes bakes them into the clip", "[midi][clip][recording]") {
     midi::MidiClip clip(1, "Take");
     clip.appendRecorded(midi::Message::noteOn(0, 60, 100, 0));

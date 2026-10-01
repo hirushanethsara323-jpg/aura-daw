@@ -292,11 +292,13 @@ void MidiClip::collectEvents(std::int64_t startTick, std::int64_t endTick,
     for (const auto& note : notes_) {
         if (note.startTicks >= startTick && note.startTicks < endTick)
             out.push_back(Message::noteOn(note.channel, note.pitch, note.velocity, note.startTicks));
+        // One note-off per note, emitted in the window that contains its end - a
+        // note that started before the window and is still sounding ends here too.
+        // (There used to be a second condition for "started earlier, still
+        // sounding", which was a strict subset of this one: the note was turned off
+        // twice, and a synth that counts active voices per pitch could end the
+        // *next* note of that pitch with the stale off.)
         if (note.endTicks() >= startTick && note.endTicks() < endTick)
-            out.push_back(Message::noteOff(note.channel, note.pitch, note.endTicks()));
-        // Notes that started before the window and are still sounding must have
-        // their note-off scheduled inside it (otherwise a stuck note results).
-        if (note.startTicks < startTick && note.endTicks() > startTick && note.endTicks() < endTick)
             out.push_back(Message::noteOff(note.channel, note.pitch, note.endTicks()));
     }
     for (const auto& controller : controllers_) {
