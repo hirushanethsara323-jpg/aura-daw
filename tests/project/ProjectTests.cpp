@@ -96,6 +96,60 @@ TEST_CASE("A project round-trips through the .aura directory format", "[project]
     }
 }
 
+TEST_CASE("A send survives a save and reload unchanged", "[project][io][sends]") {
+    // A send's level and tap point are mix decisions: losing either one on save
+    // changes the mix when the project is reopened, which is data loss the user
+    // cannot see. The fields were serialized before they were used, so this pins
+    // them to the audio they now control rather than to the JSON writer alone.
+    const std::string directory = "/tmp/aura-project-send-test";
+    (void)filesystem::removeFile(directory + "/project.json");
+
+    auto project = project::Project::createEmpty("Send Round Trip");
+    project->setSampleRate(48000.0);
+    project->mixer().prepare(48000.0, 256, 2);
+
+    const auto trackId = project->mixer().createTrack(audio::TrackKind::Audio, "Vocal");
+    const auto cueId = project->mixer().createTrack(audio::TrackKind::Bus, "Cue");
+    const auto reverbId = project->mixer().createTrack(audio::TrackKind::Bus, "Reverb");
+    audio::Track* track = project->mixer().findTrack(trackId);
+    REQUIRE(track != nullptr);
+
+    audio::Send cue;
+    cue.destination = cueId;
+    cue.level = 0.25f;
+    cue.preFader = true;
+    cue.enabled = true;
+    track->addSend(cue);
+
+    audio::Send reverb;
+    reverb.destination = reverbId;
+    reverb.level = 1.0f;
+    reverb.preFader = false;
+    reverb.enabled = false; // a disabled send must stay disabled
+    track->addSend(reverb);
+
+    std::string actualPath;
+    REQUIRE(static_cast<bool>(project->saveAs(directory, &actualPath)));
+
+    auto reloaded = project::Project::load(actualPath);
+    REQUIRE(reloaded.hasValue());
+    const audio::Track* reloadedTrack = reloaded.value()->mixer().findTrack(trackId);
+    REQUIRE(reloadedTrack != nullptr);
+    REQUIRE(reloadedTrack->sends().size() == 2);
+
+    const auto& loadedCue = reloadedTrack->sends()[0];
+    REQUIRE(loadedCue.destination == cueId);
+    REQUIRE(loadedCue.level == Approx(0.25f).margin(0.0001f));
+    REQUIRE(loadedCue.preFader); // the tap point is a routing decision, not a detail
+    REQUIRE(loadedCue.enabled);
+
+    const auto& loadedReverb = reloadedTrack->sends()[1];
+    REQUIRE(loadedReverb.destination == reverbId);
+    REQUIRE(loadedReverb.level == Approx(1.0f).margin(0.0001f));
+    REQUIRE_FALSE(loadedReverb.preFader);
+    REQUIRE_FALSE(loadedReverb.enabled);
+}
+
 TEST_CASE("Save As never silently overwrites an existing project", "[project][io]") {
     const std::string directory = "/tmp/aura-project-collision";
     auto first = project::Project::createEmpty("First");
