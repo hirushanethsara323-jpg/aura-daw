@@ -1,0 +1,95 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "AURA_BUILD_TESTS": "ON",
+        "AURA_BUILD_BENCHMARKS": "ON"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows x64 Debug",
+      "inherits": "windows-base",
+      "cacheVariables": { "CMAKE_CONFIGURATION_TYPES": "Debug" }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows x64 Release",
+      "inherits": "windows-base",
+      "cacheVariables": { "CMAKE_CONFIGURATION_TYPES": "Release" }
+    },
+    {
+      "name": "windows-relwithdebinfo",
+      "displayName": "Windows x64 RelWithDebInfo",
+      "inherits": "windows-base",
+      "cacheVariables": { "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo" }
+    },
+    {
+      "name": "windows-release-app",
+      "displayName": "Windows x64 Release + JUCE application",
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Release",
+        "AURA_BUILD_APP": "ON"
+      }
+    },
+    {
+      "name": "portable-debug",
+      "displayName": "Portable toolchain (GCC/Clang) Debug with sanitizers",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/portable-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "AURA_BUILD_TESTS": "ON",
+        "AURA_BUILD_BENCHMARKS": "ON",
+        "AURA_ENABLE_ALLOC_TRACKING": "ON",
+        "AURA_ENABLE_RT_ASSERTS": "ON",
+        "AURA_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "portable-release",
+      "displayName": "Portable toolchain (GCC/Clang) Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/portable-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "AURA_BUILD_TESTS": "ON",
+        "AURA_BUILD_BENCHMARKS": "ON",
+        "AURA_WARNINGS_AS_ERRORS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-debug", "configurePreset": "windows-debug", "configuration": "Debug" },
+    { "name": "windows-release", "configurePreset": "windows-release", "configuration": "Release" },
+    { "name": "windows-relwithdebinfo", "configurePreset": "windows-relwithdebinfo", "configuration": "RelWithDebInfo" },
+    { "name": "portable-debug", "configurePreset": "portable-debug" },
+    { "name": "portable-release", "configurePreset": "portable-release" }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "portable-debug",
+      "configurePreset": "portable-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "portable-release",
+      "configurePreset": "portable-release",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

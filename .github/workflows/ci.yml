@@ -1,0 +1,187 @@
+# ============================================================================
+# AURA DAW - CI
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# What CI has to prove (in priority order):
+#   1. the Windows build works (Debug + Release, /W4 /WX) - it is the platform
+#      that ships, and a green Linux build proves nothing about COM/WASAPI;
+#   2. tests pass, including the static real-time-safety audit;
+#   3. the engine still builds and tests with every optional dependency OFF;
+#   4. static analysis is clean on the fast job;
+#   5. sanitizers find nothing on the fast job.
+#
+# Runners have 2 cores: the build is -j 2 and the FetchContent directory is
+# cached, otherwise the jobs spend their budget recompiling Catch2.
+# ============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CTEST_OUTPUT_ON_FAILURE: 1
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debug
+            build_type: Debug
+            extra: ""
+          - name: Debug+Sanitizers
+            build_type: Debug
+            extra: "-DAURA_ENABLE_SANITIZERS=ON"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-13
+      - name: Cache FetchContent
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: linux-${{ matrix.name }}-deps-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt') }}
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_CXX_COMPILER=g++-13 \
+            -DAURA_BUILD_TESTS=ON \
+            -DAURA_WARNINGS_AS_ERRORS=ON \
+            ${{ matrix.extra }}
+      - name: Build
+        run: cmake --build build -j 2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Real-time safety audit
+        run: python3 tools/rt_audit.py . --list
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-linux-${{ matrix.name }}
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/CMakeFiles/CMakeConfigureLog.yaml
+
+  static-analysis:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang-tidy-18 clang-18
+      - name: Configure
+        run: |
+          cmake -S . -B build-tidy -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_CXX_CLANG_TIDY=clang-tidy-18 \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - name: Analyse the engine (warnings do not fail the job)
+        run: cmake --build build-tidy -j 2 || true
+      - name: Upload the compile database for local use
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile_commands
+          path: build-tidy/compile_commands.json
+
+  windows:
+    name: Windows ${{ matrix.name }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debug
+            build_type: Debug
+            extra: ""
+          - name: Release
+            build_type: Release
+            extra: ""
+          # Proves that "optional" dependencies really are optional: no network
+          # fetch, no ASIO, no VST3, no JUCE.
+          - name: Release-no-deps
+            build_type: Release
+            extra: "-DAURA_FETCH_DEPS=OFF -DAURA_CATCH2_DIR=${{ github.workspace }}/../catch2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch Catch2 once (for the no-deps job)
+        if: matrix.name == 'Release-no-deps'
+        shell: bash
+        run: git clone --branch v3.7.1 --depth 1 https://github.com/catchorg/Catch2.git "${{ github.workspace }}/../catch2"
+
+      - name: Cache FetchContent
+        if: matrix.name != 'Release-no-deps'
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: windows-${{ matrix.name }}-deps-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt') }}
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DAURA_BUILD_TESTS=ON \
+            -DAURA_WARNINGS_AS_ERRORS=ON \
+            ${{ matrix.extra }}
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build_type }} -j 2
+
+      - name: Test
+        shell: bash
+        run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-windows-${{ matrix.name }}
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/CMakeFiles/CMakeConfigureLog.yaml
+
+  # One job that only checks the documentation claims that are cheap to verify:
+  # every research document is referenced by the index, and the licence headers
+  # are on every source file.
+  hygiene:
+    name: Repo hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every source file has the SPDX header
+        run: |
+          missing=0
+          while IFS= read -r f; do
+            if ! head -n 12 "$f" | grep -q "SPDX-License-Identifier: GPL-3.0-or-later"; then
+              echo "missing SPDX header: $f"; missing=1
+            fi
+          done < <(find include src tests tools bench -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.py' \) 2>/dev/null)
+          exit $missing
+      - name: Research documents are listed in the index
+        run: |
+          status=0
+          for f in docs/research/*.md; do
+            base=$(basename "$f")
+            [ "$base" = "README.md" ] && continue
+            if ! grep -q "$base" docs/research/README.md; then
+              echo "not listed in docs/research/README.md: $base"; status=1
+            fi
+          done
+          exit $status

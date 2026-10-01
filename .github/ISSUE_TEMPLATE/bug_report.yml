@@ -1,0 +1,79 @@
+name: Bug report
+description: Something behaves differently from what it should
+title: "[Bug] "
+labels: ["type:bug", "status:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The two things that make a DAW bug fixable are
+        **what the engine was asked for** and **what the device actually gave us**
+        — please don't skip those.
+  - type: input
+    id: version
+    attributes:
+      label: AURA version
+      description: About box, or the version in the window title
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a new project
+        2. Add an audio track and a clip
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Engine / playback
+        - DSP (a specific processor)
+        - Device (WASAPI / ASIO / mock)
+        - Recording
+        - Editing / timeline
+        - MIDI / piano roll
+        - Plug-ins
+        - Project files / save / recovery
+        - UI / shortcuts
+        - Build / installer
+        - Documentation
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Audio device and driver
+      placeholder: "Focusrite Scarlett 2i2, WASAPI exclusive, 48000 Hz, 256 frames"
+  - type: input
+    id: granted
+    attributes:
+      label: Sample rate / buffer size the driver granted
+      placeholder: "asked for 2048, got 4096" 
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        CPU load / peak load / xruns from the diagnostics panel, plus the last log
+        lines. For a crash: the minidump path shown in the dialog (AURA never
+        uploads anything by itself).
+    validations:
+      required: false
+  - type: checkboxes
+    id: data-loss
+    attributes:
+      label: Data safety
+      options:
+        - label: This report involves possible data loss (a project, a take, settings)

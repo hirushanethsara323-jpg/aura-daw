@@ -1,0 +1,24 @@
+# Build directories (CMake presets use their own)
+/build/
+/build-*/
+/_deps/
+CMakeUserPresets.json
+
+# Editor / IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+compile_commands.json
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Test and tool output that must never be committed
+*.wav
+*.aurapeaks
+*.dmp
+/build/Testing/

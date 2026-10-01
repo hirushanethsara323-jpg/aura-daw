@@ -1,0 +1,60 @@
+name: Feature request
+description: Suggest a capability or a change in behaviour
+title: "[Feature] "
+labels: ["type:feature", "status:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        AURA's rule is that a feature proposal answers three questions: *what
+        musical problem does it solve*, *what does it cost on the audio thread*,
+        and *what does it change for existing projects*.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can't you do today? Describe the musical or engineering task, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Engine / routing / graph
+        - DSP
+        - Recording / editing
+        - MIDI / instruments
+        - Plug-ins
+        - Project format / interoperability
+        - UI / workflow / shortcuts
+        - Performance
+        - Accessibility / localisation
+        - Build / packaging
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Other DAWs' approaches are useful context — say what you liked and disliked.
+  - type: textarea
+    id: cost
+    attributes:
+      label: Real-time and format impact (if you know)
+      description: |
+        Does it need work on the audio thread? Does it change the project format
+        or break existing sessions?
+  - type: checkboxes
+    id: licence
+    attributes:
+      label: Licensing
+      options:
+        - label: This proposal does not require copying proprietary code, third-party instruments, or copyrighted UI assets
+          required: true

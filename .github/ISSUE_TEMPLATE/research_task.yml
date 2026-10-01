@@ -1,0 +1,50 @@
+name: Research task
+description: An open question that needs answering before code is written
+title: "[Research] "
+labels: ["type:research", "status:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        AURA records decisions before implementing them (`docs/research/`). Use this
+        template for a question that must be settled by evidence — a benchmark, a
+        specification, a licence check — rather than by preference.
+  - type: input
+    id: doc
+    attributes:
+      label: Target document
+      description: Which research document should record the outcome?
+      placeholder: docs/research/PERFORMANCE_RESEARCH.md
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: The question, in one sentence
+      placeholder: Should the graph and EQ gain an SSE2 path, or is the compiler sufficient?
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options to compare
+      placeholder: |
+        1. Leave it to the compiler (baseline)
+        2. Explicit SSE2 intrinsics for gain/pan/mix/metering
+        3. AVX2 with runtime dispatch
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: What would settle it
+      description: Primary sources, benchmarks, licence texts. "It feels faster" is not evidence.
+    validations:
+      required: true
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Needed by
+      options: ["M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12"]
+    validations:
+      required: true

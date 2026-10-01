@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/aura-daw/aura-daw/discussions
+    about: Ask how to do something, or discuss an idea before opening an issue.
+  - name: Security report
+    url: https://github.com/aura-daw/aura-daw/security/advisories/new
+    about: Report a vulnerability privately - please do not open a public issue.
