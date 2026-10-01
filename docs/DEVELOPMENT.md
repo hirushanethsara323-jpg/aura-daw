@@ -79,6 +79,11 @@ a red CI job, so the flag sets are kept deliberately equal (ADR-0013):
   `pragma warning(push/pop)`, never add a global `/wd` or `-Wno-` flag, and record
   the reason in ADR-0013.
 * `sizeof`-based `if` in a template is C4127 on MSVC — write `if constexpr`.
+* **Windows-only code must be cross-checked, not assumed.** Nothing in a Linux
+  build compiles `src/audioio/WasapiDevice.cpp`, `PluginHost.cpp` or the Win32
+  branches of `FileSystem.cpp`. Run `bash tools/win_crosscheck.sh --headers`
+  before touching them (CI does it too, in a one-minute job that runs alongside
+  the Windows matrix).
 
 ## Real-time rules (non-negotiable on the audio path)
 
@@ -138,6 +143,7 @@ setup work is done.
 |------|-----|
 | `tools/rt_audit.py` | RT-safety findings with file:line and why |
 | `tools/include_audit.py` | files that use a standard type without its header (MSVC will reject those) |
+| `tools/win_crosscheck.sh` | compiles the Windows-only code with MinGW-w64 before a Windows CI run is spent |
 | `tests/aura_tests "case" -s` | full expression output for a failing assertion |
 | `ctest --output-on-failure` | the same, for everything |
 | `AURA_ENABLE_ALLOC_TRACKING` | counts allocations; armed inside engine tests |

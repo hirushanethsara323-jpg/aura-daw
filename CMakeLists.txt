@@ -60,7 +60,11 @@ if(MSVC)
     $<$<CONFIG:RelWithDebInfo>:/Zi /O2>
     $<$<CONFIG:Debug>:/Od /RTC1>)
   target_compile_definitions(aura_project_options INTERFACE
-    WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS UNICODE _UNICODE)
+    WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS UNICODE _UNICODE
+  # Windows 10 is the floor (AURA ships for 10/11): pinning it means the SDK does
+  # not quietly hand out APIs that only exist on a newer OS, and the MinGW
+  # cross-check (tools/win_crosscheck.sh) uses the same value.
+  _WIN32_WINNT=0x0A00 WINVER=0x0A00)
   # Static CRT by default: a DAW ships as a self-contained install and must not
   # depend on a specific VC++ redistributable being present.
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -112,6 +116,12 @@ target_include_directories(aura_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(aura_core PUBLIC Aura::Options)
+if(WIN32)
+  # core/FileSystem.cpp resolves the per-user AppData and Music folders through
+  # SHGetKnownFolderPath (shell32) and frees the returned wide string with
+  # CoTaskMemFree (ole32). A static library propagates these to whatever links it.
+  target_link_libraries(aura_core PRIVATE shell32 ole32)
+endif()
 target_compile_definitions(aura_core PUBLIC AURA_VERSION_STRING="${PROJECT_VERSION}")
 set_target_properties(aura_core PROPERTIES OUTPUT_NAME aura_core)
 
@@ -177,6 +187,10 @@ target_include_directories(aura_engine PUBLIC
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(aura_engine PUBLIC Aura::Core Aura::Dsp)
 if(WIN32)
+  # ole32 - COM (WASAPI devices, CoInitializeEx/CoCreateInstance/CoTaskMemFree)
+  # avrt  - MMCSS "Pro Audio" thread promotion for the render loop
+  # winmm - waveOut-style fallback and the timer resolution calls in the clock
+  # (uuid is not needed: every IID is resolved at compile time through __uuidof.)
   target_link_libraries(aura_engine PRIVATE ole32 avrt winmm)
 endif()
 

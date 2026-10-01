@@ -68,6 +68,24 @@ clone command in the message instead of a generic "package not found".
 
 Catch2 is BSL-1.0; a local checkout is a legal and supported way to build.
 
+## Checking the Windows code from Linux
+
+The Windows-only code (`WASAPI`, COM, the Win32 file system paths) is not compiled
+by a GCC/Linux build, so a mistake there costs a Windows CI round to find. A
+MinGW-w64 cross compiler can type-check all of it locally in under a minute:
+
+```bash
+sudo apt-get install -y g++-mingw-w64-x86-64     # development tool only
+bash tools/win_crosscheck.sh --headers
+```
+
+It compiles every `src/**/*.cpp` and every public header standalone with the same
+warning set as the native build, and exits non-zero on the first failure. MinGW is
+**not** a supported AURA target - MSVC is - and the check does not link or run
+anything; it exists because three Windows CI rounds were lost to problems it finds
+instantly (see ADR-0014). `--require-toolchain` makes a missing cross compiler an
+error, which is how the CI job uses it.
+
 ## Configuration problems and their answers
 
 * **`CMake Generate step failed. Build files cannot be regenerated correctly.`**

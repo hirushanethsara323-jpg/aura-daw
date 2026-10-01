@@ -183,6 +183,31 @@ live in the per-topic documents in this folder; this file is the index of record
   are in the matrix, so an asymmetry is caught by the first push rather than by a
   user. `docs/DEVELOPMENT.md` documents the contract for contributors.
 
+## ADR-0014 — Windows-only code is cross-checked on Linux, not trusted
+
+* **Accepted.** `tools/win_crosscheck.sh` compiles every `src/**/*.cpp` and every
+  public header standalone with a MinGW-w64 cross compiler (`-fsyntax-only`, the
+  same warning set as the native build). It runs as the CI job "Windows
+  cross-check" (Ubuntu, ~1 minute) and is documented for local use in
+  `../BUILDING.md`.
+* **Why:** the third CI run failed on `src/audioio/WasapiDevice.cpp` for three
+  separate reasons that a Linux build can never show, because GCC never compiles
+  that file's Windows branch: the WASAPI/WRL headers were included *inside*
+  `namespace aura::audioio` (so MSVC reported `C2653: 'Microsoft': is not a class
+  or namespace name` and `C2786: invalid operand for __uuidof`), `ComPtr` was
+  aliased from a class template without arguments (invalid everywhere — the file
+  had simply never been compiled), and `EnumAudioEndpoints(eRender | eCapture, …)`
+  passed an `int` where `EDataFlow` was expected *and* meant "all endpoints" while
+  the value it produced (1) means "capture only".
+* **Rejected:** relying on the MSVC job alone (10–20 minutes per discovery, three
+  findings per run because the compiler stops at the first file); making MinGW a
+  supported build target (it is a check, not a product); vendoring the Windows SDK
+  headers; adding a Windows-targeting LLVM toolchain (no MSVC headers on Linux).
+* **Consequences:** MinGW-w64 is a documented **development-only** dependency
+  (`docs/LICENSES.md`), never linked or shipped. The MSVC job stays the gate that
+  says "it really builds and runs on Windows"; the cross-check only makes sure it
+  is not asked to discover what a type checker can.
+
 ---
 
 ## Open decisions

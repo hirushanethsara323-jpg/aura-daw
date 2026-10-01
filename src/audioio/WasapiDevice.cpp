@@ -21,6 +21,29 @@
 #include "aura/core/Clock.hpp"
 #include "aura/core/Log.hpp"
 
+#if defined(_WIN32)
+// Windows and COM headers are included at *global* scope, deliberately. This file
+// used to include them inside `namespace aura::audioio`, which nests every COM
+// interface declaration in that namespace: MSVC then reported
+//
+//   error C2653: 'Microsoft': is not a class or namespace name
+//   error C2786: '<error>': invalid operand for __uuidof
+//
+// for the WRL smart pointer and the interface IIDs below. Nothing else in the
+// tree includes a header inside a namespace, and tools/include_audit.py now fails
+// if that changes.
+// clang-format off
+#include <windows.h>
+#include <mmdeviceapi.h>
+#include <audioclient.h>
+#include <audiopolicy.h>
+#include <functiondiscoverykeys_devpkey.h>
+#include <avrt.h>
+#include <propidl.h>
+#include <wrl/client.h>   // Microsoft::WRL::ComPtr
+// clang-format on
+#endif
+
 namespace aura::audioio {
 namespace {
 constexpr const char* kCategory = "AudioIO.WASAPI";
@@ -31,19 +54,14 @@ constexpr const char* kCategory = "AudioIO.WASAPI";
 // ---------------------------------------------------------------------------
 // Windows implementation
 // ---------------------------------------------------------------------------
-// clang-format off
-#include <windows.h>
-#include <mmdeviceapi.h>
-#include <audioclient.h>
-#include <audiopolicy.h>
-#include <functiondiscoverykeys_devpkey.h>
-#include <avrt.h>
-#include <propidl.h>
-// clang-format on
 
 namespace {
 
-using ComPtr = Microsoft::WRL::ComPtr;
+// WRL's ComPtr is a class template; a bare `using ComPtr = Microsoft::WRL::ComPtr;`
+// is not valid C++ (GCC: "'auto' not allowed in alias declaration"). This alias
+// template keeps the shorter spelling at every use site.
+template <typename T>
+using ComPtr = Microsoft::WRL::ComPtr<T>;
 
 /// RAII for the COM apartment: WASAPI requires MTA (or STA) plus COM
 /// initialisation on every thread that touches the endpoint.
@@ -93,8 +111,11 @@ std::vector<AudioDeviceInfo> wasapiEnumerateDevices() {
     }
 
     ComPtr<IMMDeviceCollection> collection;
-    if (FAILED(enumerator->EnumAudioEndpoints(eRender | eCapture, DEVICE_STATE_ACTIVE,
-                                              &collection))) {
+    // eAll, not `eRender | eCapture`: EDataFlow is eRender = 0, eCapture = 1,
+    // eAll = 2, so the bitwise-or of the first two is *1* - it would have
+    // enumerated capture endpoints only. (It also does not type-check: an int is
+    // not an EDataFlow.)
+    if (FAILED(enumerator->EnumAudioEndpoints(eAll, DEVICE_STATE_ACTIVE, &collection))) {
         return devices;
     }
 

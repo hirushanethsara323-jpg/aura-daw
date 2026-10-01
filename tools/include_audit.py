@@ -14,7 +14,10 @@
 # This tool checks the opposite direction: a file must ask for what it uses.
 # For every translation unit in the tree it resolves the *transitive* project
 # include closure and then reports a standard-library symbol whose header is not
-# in that closure.
+# in that closure. A second rule catches the same class of failure from the other
+# direction: an #include directive written inside a namespace, which buries that
+# header's declarations in the namespace (and made the WASAPI COM code
+# uncompilable on Windows while building fine on Linux).
 #
 # Scope, deliberately narrow: only headers that the two standard libraries do not
 # reliably hand out for free. <vector>, <string>, <cstring>, <cstdlib>, <cmath>
@@ -176,6 +179,8 @@ SOURCE_GLOBS = ("include/**/*.hpp", "src/**/*.cpp", "src/**/*.hpp",
                 "app/**/*.cpp", "app/**/*.hpp")
 
 SEARCH_ROOTS = ("include", "src", "tests", "bench", "app")
+
+NAMESPACE_RE = re.compile(r"^\s*namespace\b")
 ALLOW_RE = re.compile(r"include-audit:\s*allow\s+(<[^>]+>)\s*-\s*(\S.*)$")
 INCLUDE_RE = re.compile(r'#\s*include\s+([<"][^">]+[">])')
 
@@ -188,6 +193,37 @@ def strip_comments(text: str) -> str:
     """
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
     return re.sub(r"//[^\n]*", " ", text)
+
+
+def includes_inside_namespaces(text: str) -> list[int]:
+    """Line numbers of #include directives that appear inside a namespace.
+
+    Including a header inside `namespace aura::x` nests every declaration it makes
+    in that namespace. The Windows/COM headers make this fatal rather than
+    cosmetic: src/audioio/WasapiDevice.cpp used to include <mmdeviceapi.h> and
+    <wrl/client.h> inside `namespace aura::audioio`, so MSVC reported
+
+        error C2653: 'Microsoft': is not a class or namespace name
+        error C2786: '<error>': invalid operand for __uuidof
+
+    Brace counting is an approximation, but a wrong answer here can only come from
+    a file that is already confusing.
+    """
+    code = strip_comments(text)
+    code = re.sub(r'"(?:\\.|[^"\\])*"', '""', code)
+    code = re.sub(r"'(?:\\.|[^'\\])*'", "''", code)
+    findings: list[int] = []
+    depth = 0
+    namespace_depths: list[int] = []
+    for lineno, line in enumerate(code.splitlines(), 1):
+        if NAMESPACE_RE.match(line) and "{" in line:
+            namespace_depths.append(depth + line.count("{"))
+        if INCLUDE_RE.search(line) and namespace_depths:
+            findings.append(lineno)
+        depth += line.count("{") - line.count("}")
+        while namespace_depths and depth < namespace_depths[-1]:
+            namespace_depths.pop()
+    return findings
 
 
 def includes_of(text: str) -> tuple[set[str], list[str]]:
@@ -274,10 +310,23 @@ def audit(root: pathlib.Path, as_json: bool, show_list: bool) -> tuple[int, list
 
         for header, symbol in sorted(seen_symbols.items()):
             findings.append({
+                "kind": "missing-header",
                 "file": rel,
+                "line": 0,
                 "header": header,
                 "symbol": symbol,
                 "reason": "symbol used but its header is not in the include closure",
+            })
+
+        for lineno in includes_inside_namespaces(raw):
+            findings.append({
+                "kind": "include-in-namespace",
+                "file": rel,
+                "line": lineno,
+                "header": "",
+                "symbol": "",
+                "reason": "include directive inside a namespace: the header's "
+                          "declarations become members of that namespace",
             })
 
     if as_json:
@@ -285,8 +334,12 @@ def audit(root: pathlib.Path, as_json: bool, show_list: bool) -> tuple[int, list
     else:
         print(f"include_audit: {len(files)} files scanned -> {len(findings)} finding(s)")
         for finding in findings:
-            print(f"  error: {finding['file']}: uses {finding['symbol']} without "
-                  f"{finding['header']} (MSVC will reject this; libstdc++ hides it)")
+            if finding["kind"] == "missing-header":
+                print(f"  error: {finding['file']}: uses {finding['symbol']} without "
+                      f"{finding['header']} (MSVC will reject this; libstdc++ hides it)")
+            else:
+                print(f"  error: {finding['file']}:{finding['line']}: include inside a "
+                      f"namespace (declare the header at global scope)")
         for path in files:
             raw = path.read_text(encoding="utf-8", errors="replace")
             for line in raw.splitlines():

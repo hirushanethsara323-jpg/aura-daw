@@ -30,6 +30,7 @@ dependency — a deliberate consequence of ADR-0005 (own device layer) and ADR-0
 | Dependency | Version | Licence | Purpose | Maintenance | Build impact | Runtime impact |
 |------------|---------|---------|---------|-------------|--------------|----------------|
 | **Catch2** | 3.7.1 | BSL-1.0 | unit/integration/regression tests | active (catchorg) | fetched by `FetchContent`, compiled as a static library (moderate) | test binary only, never shipped |
+| **MinGW-w64** (`g++-mingw-w64-x86-64`) | 12.0.0 headers / GCC 14 | GPL-3.0-or-later with the GCC runtime exception, plus public-domain-ish Windows headers | cross-checks the Windows-only code (`tools/win_crosscheck.sh`, CI job "Windows cross-check") on Linux | active (mingw-w64 project) | not part of any AURA build; installed only in that CI job and optionally on a developer machine | none — nothing it produces is linked or shipped |
 
 ## Optional dependencies (off by default, never vendored)
 

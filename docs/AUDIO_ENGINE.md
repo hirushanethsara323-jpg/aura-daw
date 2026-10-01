@@ -48,6 +48,24 @@ comparison table. The master limiter is part of the graph's output path even tho
 the engine runs it after the plan, so it is reported explicitly. A compensating
 delay that does not exist yet is not reported as if it did.
 
+## Windows system libraries
+
+AURA links four Windows import libraries and nothing else from the platform. They
+are part of the Windows SDK, so they add no third-party dependency, but each one
+has a reason and the list is closed on purpose:
+
+| Library | Used for |
+|---------|----------|
+| `ole32` | COM: `CoInitializeEx`/`CoUninitialize`, `CoCreateInstance`, `CoTaskMemFree` (including the strings `SHGetKnownFolderPath` returns) |
+| `shell32` | `SHGetKnownFolderPath` — the per-user AppData and Music folders |
+| `avrt` | MMCSS: promoting the render thread to "Pro Audio" (`AvSetMmThreadCharacteristicsW`) and reverting it on stop |
+| `winmm` | timer resolution (`timeBeginPeriod`) and the legacy output path used as a compatibility fallback |
+
+`uuid` is deliberately absent: every interface ID is resolved at compile time
+through `__uuidof`, so there is no link-time GUID symbol to satisfy. When the
+crash handler lands (M7) it will add `dbghelp` for `MiniDumpWriteDump`, and that
+will be recorded here and in `LICENSES.md` at the same time.
+
 ## Device management
 
 * `AudioDeviceManager` enumerates, opens, closes and switches devices and owns the

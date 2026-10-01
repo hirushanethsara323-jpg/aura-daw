@@ -105,9 +105,13 @@ Three mechanisms:
 2. **Dynamic** — `EngineTests` arms the allocation tracker
    (`rt::setTrackingEnabled` + `rt::resetRealtimeAllocationCount`) and renders a
    block through the engine, asserting `rt::realtimeAllocationCount() == 0`.
-3. **Static, portability** — `tools/include_audit.py` (ctest
+3. **Static, portability** — two gates. `tools/include_audit.py` (ctest
    `aura.static.include_audit`) checks that every file asks for the standard
-   headers it uses, resolving the *transitive project* include closure first. This
+   headers it uses, resolving the *transitive project* include closure first, and
+   that no `#include` sits inside a namespace.
+   `tools/win_crosscheck.sh` (CI job "Windows cross-check") compiles every
+   Windows-only translation unit and every public header with MinGW-w64, so the
+   MSVC-only code is type-checked on every push without a Windows runner. This
    exists because libstdc++ hands `std::mutex`, `std::thread`, `std::chrono` and
    friends out through unrelated headers, so a Linux build cannot tell you whether
    MSVC will accept the file — and MSVC rejected exactly that in the second CI run
