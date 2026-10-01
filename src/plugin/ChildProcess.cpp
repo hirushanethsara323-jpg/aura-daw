@@ -153,10 +153,18 @@ std::string helperExecutablePath(const std::string& name) {
     const std::string executable = name;
 #endif
 
+    // The last two cover a build tree: the tests live in tests/ while the helper
+    // is built into tools/. CMake pins that to one directory for every
+    // configuration (see CMakeLists.txt), but a tree configured before that - or by
+    // an IDE that put the configuration name back in - is still worth finding, by
+    // reusing the executable's own configuration directory name.
+    const std::string configName = directory.filename().string();
     const std::vector<std::string> candidates = {
         (directory / executable).string(),
         (directory / ".." / "tools" / executable).string(),
         (directory / ".." / ".." / "tools" / executable).string(),
+        (directory / ".." / "tools" / configName / executable).string(),
+        (directory / ".." / ".." / "tools" / configName / executable).string(),
     };
     return firstExisting(candidates);
 }

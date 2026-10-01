@@ -104,7 +104,12 @@ echo "win_crosscheck: compiler $($CXX --version | head -n1)"
 # ---------------------------------------------------------------------------
 # 1. every translation unit (src/, app/ once it exists)
 # ---------------------------------------------------------------------------
-mapfile -t SOURCES < <(cd "$ROOT" && find src app bench -name '*.cpp' 2>/dev/null | sort)
+# src/plugin/vst3 needs the Steinberg SDK, which is fetched only when
+# AURA_ENABLE_VST3=ON: cross-checking it here would fail on a header that is not in
+# the tree by design. The Linux "VST 3 hosting" CI job compiles and runs those files
+# for real, which is a better check than a syntax pass anyway.
+mapfile -t SOURCES < <(cd "$ROOT" && find src app bench -name '*.cpp' 2>/dev/null \
+    | grep -v '^src/plugin/vst3/' | sort)
 if [ "${#SOURCES[@]}" -eq 0 ]; then
     echo "win_crosscheck: no sources found - is this an AURA checkout?" >&2
     exit 2
