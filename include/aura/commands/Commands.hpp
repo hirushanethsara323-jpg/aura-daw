@@ -254,6 +254,11 @@ private:
     std::vector<std::unique_ptr<UndoTransaction>> undoStack_;
     std::vector<std::unique_ptr<UndoTransaction>> redoStack_;
     std::unique_ptr<UndoTransaction> openTransaction_;
+    /// True only inside undo()/redo(): while a transaction is being unwound or
+    /// replayed, beginTransaction()/addEdit() refuse to record new edits. An edit
+    /// (or a UI callback hanging off one) that touches the history from there would
+    /// otherwise be spliced into the middle of the stack being unwound and clear the
+    /// redo chain the user still needs. Guarded by ScopedApplying in Commands.cpp.
     bool applying_ = false;
 };
 

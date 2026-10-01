@@ -238,9 +238,44 @@ Status TrackMixEdit::revert(project::Project& project) {
 // ---------------------------------------------------------------------------
 // UndoHistory
 // ---------------------------------------------------------------------------
+namespace {
+
+/// Sets a flag for the duration of a scope and always clears it again.
+///
+/// UndoHistory uses this around undo()/redo(): while an edit is being applied or
+/// reverted, anything that reaches the history (a UI callback wired to the edit,
+/// an edit that itself performs a user-visible change) must NOT be recorded as a
+/// new user action -- that is what silently corrupts the redo chain. The early
+/// `return status;` error paths in undo()/redo() are exactly why this is RAII
+/// rather than a manual set/reset pair.
+class ScopedApplying {
+public:
+    explicit ScopedApplying(bool& flag) noexcept : flag_(flag) { flag_ = true; }
+    ~ScopedApplying() { flag_ = false; }
+    ScopedApplying(const ScopedApplying&) = delete;
+    ScopedApplying& operator=(const ScopedApplying&) = delete;
+
+private:
+    bool& flag_;
+};
+
+} // namespace
+
 UndoHistory::UndoHistory(std::size_t maximumEntries) : maximumEntries_(maximumEntries) {}
 
 void UndoHistory::beginTransaction(std::string description) {
+    if (applying_) {
+        // We are inside undo()/redo(). Recording this would interleave a new
+        // transaction with the one being unwound (and clear the redo stack the
+        // user still needs), so the edit is applied by the caller but not kept in
+        // history. Logged rather than silent: it always means a caller wired a
+        // change into an undo/redo callback.
+        AURA_LOG_WARN(kCategory,
+                      "Ignoring undo transaction '%s' recorded during an undo/redo "
+                      "(re-entrant edit)",
+                      description.c_str());
+        return;
+    }
     if (openTransaction_ && !openTransaction_->empty()) {
         // A transaction was left open (a UI bug): keep the user's edits instead
         // of discarding them, but make the mistake visible in the log.
@@ -259,6 +294,13 @@ void UndoHistory::beginTransaction(std::string description) {
 void UndoHistory::addEdit(std::unique_ptr<UndoEdit> edit) {
     if (!edit)
         return;
+    if (applying_) {
+        AURA_LOG_WARN(kCategory,
+                      "Ignoring undo edit '%s' recorded during an undo/redo "
+                      "(re-entrant edit)",
+                      edit->description().c_str());
+        return;
+    }
     if (!openTransaction_)
         beginTransaction(edit->description());
     openTransaction_->add(std::move(edit));
@@ -271,6 +313,16 @@ void UndoHistory::abortTransaction() {
 void UndoHistory::commitTransaction(project::Project& project, bool alreadyApplied) {
     if (!openTransaction_)
         return;
+    if (applying_) {
+        // Nothing can be open here (beginTransaction refused), but a stale
+        // transaction from before the undo would be committed into the middle of
+        // the stack being unwound: drop it loudly instead.
+        AURA_LOG_WARN(kCategory,
+                      "Dropping undo transaction '%s' committed during an undo/redo",
+                      openTransaction_->description().c_str());
+        openTransaction_.reset();
+        return;
+    }
     // A direct-manipulation gesture (dragging a clip, turning a fader) has
     // already changed the project, so the caller passes alreadyApplied = true.
     // Everything else - a menu command, a script, a macro - is applied here.
@@ -296,6 +348,10 @@ Status UndoHistory::undo(project::Project& project) {
     auto transaction = std::move(undoStack_.back());
     undoStack_.pop_back();
 
+    // From here until the transaction is on the redo stack, no new history may be
+    // recorded (see ScopedApplying).
+    const ScopedApplying applying(applying_);
+
     // Revert in reverse order so dependent edits unwind correctly.
     for (auto it = transaction->edits().rbegin(); it != transaction->edits().rend(); ++it) {
         const Status status = (*it)->revert(project);
@@ -311,6 +367,9 @@ Status UndoHistory::redo(project::Project& project) {
         return failure(makeError(ErrorCode::NotFound, "Nothing to redo"));
     auto transaction = std::move(redoStack_.back());
     redoStack_.pop_back();
+
+    const ScopedApplying applying(applying_);
+
     for (const auto& edit : transaction->edits()) {
         const Status status = edit->apply(project);
         if (!status)

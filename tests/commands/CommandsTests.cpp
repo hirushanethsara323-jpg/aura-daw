@@ -131,6 +131,107 @@ TEST_CASE("Adding a clip through an edit is undoable", "[commands][undo]") {
     REQUIRE(project->findClip(id) == nullptr);
 }
 
+// ---------------------------------------------------------------------------
+// Re-entrancy guard: an edit (or a UI callback hanging off one) that reaches the
+// history while undo()/redo() is running must not be recorded. Before this guard
+// existed the `applying_` flag was declared and never read, which clang's
+// -Wunused-private-field reported -- a warning that pointed at a real hole: the
+// intruding transaction was spliced into the middle of the stack being unwound and
+// cleared the redo branch the user still needed.
+// ---------------------------------------------------------------------------
+namespace {
+
+/// An edit whose revert() performs *another* history-visible action, which is what
+/// a callback wired to a parameter change looks like from inside the history.
+class ReentrantEdit final : public commands::UndoEdit {
+public:
+    ReentrantEdit(std::string description, commands::UndoHistory& history, int& intrusions)
+        : description_(std::move(description)), history_(history), intrusions_(intrusions) {}
+
+    [[nodiscard]] std::string description() const override { return description_; }
+
+    aura::Status apply(aura::project::Project&) override { return aura::success(); }
+
+    aura::Status revert(aura::project::Project&) override {
+        ++intrusions_;
+        history_.beginTransaction("Intruder");
+        history_.addEdit(std::make_unique<commands::MoveClipEdit>(1, 0, 1));
+        history_.commitTransaction(*currentProject_);
+        return aura::success();
+    }
+
+    void setProject(aura::project::Project* project) { currentProject_ = project; }
+
+private:
+    std::string description_;
+    commands::UndoHistory& history_;
+    int& intrusions_;
+    aura::project::Project* currentProject_ = nullptr;
+};
+
+} // namespace
+
+TEST_CASE("Undo ignores history recorded from inside its own callbacks",
+          "[commands][undo][regression]") {
+    auto project = project::Project::createEmpty("Re-entrancy Test");
+    audio::Clip clip(1, audio::ClipType::Audio, "Take");
+    clip.setStart(1000);
+    clip.setLength(4000);
+    clip.setStream(stream(8000));
+    auto* stored = project->addClip(std::move(clip));
+    REQUIRE(stored != nullptr);
+
+    commands::UndoHistory history;
+    int intrusions = 0;
+    auto first = std::make_unique<commands::MoveClipEdit>(stored->id(), 1000, 3000);
+    auto second = std::make_unique<commands::MoveClipEdit>(stored->id(), 3000, 5000);
+
+    history.beginTransaction("First");
+    history.addEdit(std::move(first));
+    history.commitTransaction(*project);
+
+    // Two user actions, so there is a redo branch worth protecting.
+    history.beginTransaction("Second");
+    history.addEdit(std::move(second));
+    history.commitTransaction(*project);
+    REQUIRE(stored->start() == 5000);
+
+    REQUIRE(static_cast<bool>(history.undo(*project)));
+    REQUIRE(stored->start() == 3000);
+
+    // Now undo again, but this time the edit tries to record an action of its own.
+    auto reentrant = std::make_unique<ReentrantEdit>("Third", history, intrusions);
+    reentrant->setProject(project.get());
+    // Push it directly: the point is what happens *during* the undo below.
+    history.beginTransaction("Third");
+    history.addEdit(std::make_unique<commands::MoveClipEdit>(stored->id(), 3000, 1000));
+    history.commitTransaction(*project);
+    REQUIRE(stored->start() == 1000);
+
+    // Rebuild the stack so the re-entrant edit itself is the newest entry.
+    history.clear();
+    history.beginTransaction("Third");
+    history.addEdit(std::move(reentrant));
+    history.commitTransaction(*project);
+    REQUIRE(stored->start() == 1000);
+
+    REQUIRE(static_cast<bool>(history.undo(*project)));
+    REQUIRE(intrusions == 1); // the callback really did run
+
+    // The redo branch must still hold exactly the one real action, and undoing it
+    // must put the clip back where the user left it.
+    REQUIRE(history.canRedo());
+    REQUIRE(history.nextRedoDescription() == "Third");
+    REQUIRE_FALSE(static_cast<bool>(history.undo(*project))); // stack is exhausted
+    REQUIRE(static_cast<bool>(history.redo(*project)));
+    REQUIRE(stored->start() == 1000);
+
+    // And the intruder never became an undo step of its own: after the two undos
+    // and one redo above, the history holds at most the single real entry.
+    CHECK(history.historyDescriptions().size() <= 1);
+    CHECK(history.canRedo() == (history.historyDescriptions().size() == 0));
+}
+
 TEST_CASE("A new action clears the redo branch", "[commands][undo]") {
     auto project = project::Project::createEmpty("Redo Branch");
     commands::UndoHistory history;
