@@ -116,6 +116,12 @@ if(AURA_ENABLE_VST3)
   endif()
   target_include_directories(aura_test_vst3_plugin SYSTEM PRIVATE ${vst3sdk_SOURCE_DIR})
   target_link_libraries(aura_test_vst3_plugin PRIVATE sdk sdk_common)
+  if(MSVC)
+    # Same reason as aura_vst3_sdk_bridge in the root CMakeLists: the SDK keys its
+    # SMTG_CPP20 detection off __cplusplus, which MSVC only reports truthfully with
+    # /Zc:__cplusplus - and this target does not link aura_project_options either.
+    target_compile_options(aura_test_vst3_plugin PRIVATE /Zc:__cplusplus)
+  endif()
 
   # Both layouts the format defines: a bundle is <name>.vst3/Contents/<platform>/
   # <name>.<ext>, the loader refuses anything else, and the inner file must be named

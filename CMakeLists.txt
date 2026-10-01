@@ -292,7 +292,18 @@ if(AURA_ENABLE_VST3)
       ${vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/module_linux.cpp)
   endif()
   target_include_directories(aura_vst3_sdk_bridge SYSTEM PRIVATE ${vst3sdk_SOURCE_DIR})
-  target_compile_features(aura_vst3_sdk_bridge PRIVATE cxx_std_17)
+  target_compile_features(aura_vst3_sdk_bridge PRIVATE cxx_std_20)
+  if(MSVC)
+    # The bridge is compiled with C++20 like the rest of the tree, but it does not
+    # link aura_project_options (that would put third-party SDK code under AURA's
+    # -Werror gate - see above), so it has to be told the one flag that matters to
+    # the SDK: without /Zc:__cplusplus MSVC reports __cplusplus as 199711L, the
+    # SDK's SMTG_CPP20 therefore evaluates to 0 while the compiler is in C++20 mode,
+    # and its Windows module loader takes the pre-C++20 branch that passes a
+    # std::u8string where a std::string is expected (C2664 on the machine that
+    # ships). GCC/Clang get an honest __cplusplus for free.
+    target_compile_options(aura_vst3_sdk_bridge PRIVATE /Zc:__cplusplus)
+  endif()
   target_link_libraries(aura_vst3_sdk_bridge PRIVATE sdk_hosting sdk_common ${CMAKE_DL_LIBS})
   target_compile_definitions(aura_engine PUBLIC AURA_ENABLE_VST3=1)
   # sdk_hosting - module loading, PlugProvider, ProcessData, parameter changes.
