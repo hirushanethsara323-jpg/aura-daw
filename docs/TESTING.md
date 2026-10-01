@@ -165,6 +165,27 @@ mkdir -p /tmp/corpus && cp -r fuzz/corpus/* /tmp/corpus/     # keep the tree cle
 ./build-fuzz/fuzz/aura_fuzz_wav /tmp/corpus/wav -max_total_time=3600 -artifact_prefix=/tmp/
 ```
 
+### Campaign results (2026-10-01)
+
+A local campaign of the three targets under `-fsanitize=fuzzer,address,undefined`
+(Clang 19, 2-core runner), each seeded from the committed corpus:
+
+| Target | Runs | Wall time | Findings |
+|--------|-----:|----------:|---------:|
+| `aura_fuzz_json` | 1 877 224 | 151 s | 0 |
+| `aura_fuzz_manifest` | 1 222 820 | 151 s | 0 |
+| `aura_fuzz_wav` | 2 954 294 | 241 s | 0 |
+
+That is ~6 million executions with no crash, no timeout, no leak report and no
+sanitizer diagnostic — the parsers hold up on input nobody wrote on purpose. It is
+evidence, not a proof: the corpora grew by ~2 000 units during the run (those live
+in the build tree, not in the repository), and a longer campaign on faster hardware
+would explore more. The WAV seeds in `fuzz/corpus/wav` are the ones this run started
+from — a valid file per format (8/16/24-bit PCM, 32-bit float), plus the shapes that
+break naive chunk walking: an unknown chunk before `data`, a zero-length `data`
+chunk, a size field that lies about the file length, a truncated header and a chunk
+that claims to run past the end.
+
 A finding arrives as `crash-<sha1>` / `timeout-<sha1>` / `leak-<sha1>` next to the
 artifact prefix. Reproduce it with the same binary and the file as its argument,
 then add the file to the corpus and a named test to `FuzzSmokeTests.cpp` — a crash

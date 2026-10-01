@@ -19,6 +19,9 @@ Desktop.ini
 
 # Test and tool output that must never be committed
 *.wav
+# ...except the fuzz corpus, which is committed input data: a WAV seed is a test
+# fixture that happens to have the same extension as render output.
+!fuzz/corpus/wav/*.wav
 *.aurapeaks
 *.dmp
 /build/Testing/
