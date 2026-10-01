@@ -4,28 +4,36 @@
 //
 // STATUS OF THIS FILE (read this before assuming plug-ins work):
 //   * Implemented and tested: the descriptor model, the persistent database
-//     (scan results, favourites, categories, blacklist, search) and the
-//     plug-in chain plumbing (order, bypass, latency, state save/restore).
-//   * Implemented: a filesystem scanner that discovers .vst3 / .clap bundles
-//     and records their metadata HONESTLY as "not hostable in this build"
-//     until the SDK backends are compiled in.
-//   * NOT implemented: actual in-process instantiation. `instantiatePlugin`
-//     returns a clear NotImplemented error unless AURA was built with
-//     AURA_ENABLE_VST3 / AURA_ENABLE_CLAP, which is milestone M6.
-// This split is deliberate: the database/chain/scanner are the parts the rest
-// of the engine depends on, and they are fully testable today.
+//     (scan results, favourites, categories, blacklist, search), the plug-in
+//     chain plumbing (order, bypass, latency, state save/restore) and the
+//     scanner, including its child-process mode.
+//   * Implemented: VST 3 hosting (src/plugin/vst3/), enabled with
+//     AURA_ENABLE_VST3 and verified against a real plug-in in CI. Scanning runs
+//     in `aura_scan_host` with a per-bundle timeout; loading runs in-process.
+//   * NOT implemented yet: CLAP hosting (AURA_ENABLE_CLAP is reserved, not
+//     written) and crash isolation for a *loaded* plug-in, which is sandbox work
+//     with its own milestone. Both are stated in docs/PLUGIN_HOST.md rather than
+//     being discoverable only by reading this file.
 // ============================================================================
 #include "aura/plugin/PluginHost.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <system_error>
 #include <thread>
+#include <vector>
 
+#include "ChildProcess.hpp"
 #include "aura/core/FileSystem.hpp"
 #include "aura/core/Json.hpp"
 #include "aura/core/Log.hpp"
 #include "aura/core/Strings.hpp"
+#if defined(AURA_ENABLE_VST3)
+#include "vst3/Vst3Host.hpp"
+#endif
 
 namespace aura::plugin {
 namespace {
@@ -50,11 +58,164 @@ std::string hashPath(const std::string& path) {
     return std::string(buffer);
 }
 
-/// Best-effort category inference from the vendor category string. Plug-in
-/// vendors are notoriously inconsistent here, which is why the user can override
-/// the category (PluginUserData::categoryOverride) and AURA never relies on the
-/// guessed value for anything functional.
-PluginCategory inferCategory(const std::string& categoryText, bool isInstrument) {
+/// Candidate bundles under one search path.
+///
+/// `filesystem::listFiles()` only returns regular files, which is the wrong shape
+/// here: a VST 3 bundle is a *directory* on Windows and on Linux/macOS, so
+/// filtering it for files made the scanner blind to every VST 3 plug-in on the
+/// platform this project ships to. A bundle is also a leaf - the walk must not
+/// descend into it, because the shared library inside is not a plug-in of its own.
+std::vector<filesystem::fs::path> findBundleCandidates(const std::string& directory) {
+    std::vector<filesystem::fs::path> found;
+    std::error_code error;
+
+    // A search path may BE a bundle rather than a folder of them: "scan this
+    // plug-in I just downloaded" is a reasonable thing for a user to ask for, and
+    // the walk below would otherwise look inside it and find nothing.
+    const std::string selfExtension = filesystem::extensionLower(directory);
+    if (selfExtension == "vst3" || selfExtension == "clap") {
+        if (filesystem::fs::exists(directory, error))
+            found.push_back(directory);
+        return found;
+    }
+
+    if (!filesystem::fs::is_directory(directory, error))
+        return found;
+    for (auto it = filesystem::fs::recursive_directory_iterator(
+             directory, filesystem::fs::directory_options::skip_permission_denied, error);
+         it != filesystem::fs::recursive_directory_iterator(); it.increment(error)) {
+        if (error)
+            break;
+        const filesystem::fs::path& path = it->path();
+        const std::string extension = filesystem::extensionLower(path);
+        if (extension != "vst3" && extension != "clap")
+            continue;
+        const bool directoryBundle = it->is_directory(error);
+        const bool fileBundle = it->is_regular_file(error);
+        if (!directoryBundle && !fileBundle)
+            continue;
+        if (directoryBundle)
+            it.disable_recursion_pending();
+        found.push_back(path);
+    }
+    return found;
+}
+
+#if defined(AURA_ENABLE_VST3)
+/// Temporary file for the scanner child's JSON answer. Unique per call so two
+/// scans cannot read each other's result.
+std::string scannerOutputPath() {
+    static std::atomic<std::uint64_t> counter{0};
+    const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    std::error_code error;
+    const auto directory = filesystem::fs::temp_directory_path(error);
+    return (error ? filesystem::fs::path(".") : directory).string() + "/aura-scan-" +
+           std::to_string(now) + "-" +
+           std::to_string(counter.fetch_add(1, std::memory_order_relaxed)) + ".json";
+}
+#endif // AURA_ENABLE_VST3
+
+/// Descriptors for one bundle that could not be scanned, so the browser can show
+/// the user why instead of the plug-in vanishing without explanation.
+PluginDescriptor quarantineDescriptor(const std::string& path, PluginFormat format,
+                                      const std::string& reason) {
+    PluginDescriptor descriptor;
+    descriptor.id = std::string(pluginFormatName(format)) + ":" + hashPath(path);
+    descriptor.path = path;
+    descriptor.format = format;
+    descriptor.name = filesystem::fs::path(path).stem().string();
+    descriptor.vendor = "Unknown";
+    descriptor.incompatible = true;
+    descriptor.incompatibleReason = reason;
+    descriptor.lastScanTimeMs = static_cast<std::int64_t>(Log::nowMs());
+    return descriptor;
+}
+
+#if defined(AURA_ENABLE_VST3)
+struct ScanOutcome {
+    std::vector<PluginDescriptor> descriptors;
+    std::string failureReason; ///< non-empty when the bundle could not be scanned
+    bool usedChildProcess = false;
+};
+
+/// Scans one bundle, preferring the helper process. Every failure mode comes back
+/// as a reason rather than an exception: a scanner that cannot report why a
+/// plug-in was quarantined is a scanner whose user cannot fix it.
+ScanOutcome scanVst3Bundle(const std::string& path, bool preferChildProcess,
+                           int timeoutSeconds) {
+    ScanOutcome outcome;
+    const std::string helper = preferChildProcess ? helperExecutablePath("aura_scan_host")
+                                                  : std::string{};
+    if (!helper.empty() && filesystem::exists(helper)) {
+        const std::string output = scannerOutputPath();
+        ChildProcessRequest request;
+        request.executable = helper;
+        request.arguments = {"--scan", path, "--out", output};
+        request.timeoutSeconds = static_cast<double>(std::max(1, timeoutSeconds));
+        const ChildProcessResult result = runChildProcess(request);
+        outcome.usedChildProcess = true;
+
+        std::string json;
+        if (const auto text = filesystem::readTextFile(output))
+            json = text.value();
+        (void)filesystem::removeFile(output);
+
+        if (result.timedOut) {
+            outcome.failureReason = "the scanner did not finish within " +
+                                    strings::fromDouble(request.timeoutSeconds, 0) +
+                                    "s (the plug-in may be showing a dialog or waiting for a "
+                                    "licence); the bundle was quarantined";
+            return outcome;
+        }
+        if (result.crashed()) {
+            outcome.failureReason = "the scanner crashed while loading this bundle (" +
+                                    result.error + "); the bundle was quarantined";
+            return outcome;
+        }
+        if (!result.started) {
+            outcome.failureReason = "the scanner could not be started: " + result.error;
+            return outcome;
+        }
+        if (json.empty()) {
+            outcome.failureReason = "the scanner produced no answer (" +
+                                    (result.error.empty() ? "empty output" : result.error) + ")";
+            return outcome;
+        }
+
+        std::string scannedPath;
+        std::string scanError;
+        auto parsed = vst3::parseScanResult(json, scannedPath, scanError);
+        if (!parsed) {
+            outcome.failureReason = parsed.error().message +
+                                    (scanError.empty() ? std::string{} : " - " + scanError);
+            return outcome;
+        }
+        outcome.descriptors = parsed.value();
+        return outcome;
+    }
+
+    // No helper next to the executable (a partial build, or a build tree that only
+    // has the library). The scan is the risky half of hosting, so it says out loud
+    // that it is running in-process.
+    AURA_LOG_WARN(kCategory,
+                  "aura_scan_host was not found next to the application; scanning %s "
+                  "in-process, where a crashing plug-in would take AURA with it",
+                  path.c_str());
+    auto scanned = vst3::scanBundle(path);
+    if (!scanned) {
+        outcome.failureReason = scanned.error().message;
+        if (!scanned.error().detail.empty())
+            outcome.failureReason += " - " + scanned.error().detail;
+        return outcome;
+    }
+    outcome.descriptors = scanned.value();
+    return outcome;
+}
+#endif // AURA_ENABLE_VST3
+
+} // namespace
+
+PluginCategory inferPluginCategory(std::string_view categoryText, bool isInstrument) noexcept {
     if (isInstrument)
         return PluginCategory::Instrument;
     const std::string lower = strings::toLower(categoryText);
@@ -80,8 +241,6 @@ PluginCategory inferCategory(const std::string& categoryText, bool isInstrument)
         return PluginCategory::Utility;
     return PluginCategory::Effect;
 }
-
-} // namespace
 
 const char* pluginFormatName(PluginFormat format) noexcept {
     switch (format) {
@@ -492,10 +651,12 @@ std::vector<std::string> PluginScanner::defaultSearchPaths() {
 }
 
 bool PluginScanner::childProcessScanningAvailable() noexcept {
-    // The out-of-process scanner is a Windows-only feature and is scheduled for
-    // M6 together with plug-in hosting. Until then the in-process scan runs with
-    // a per-plug-in watchdog timeout.
-    return false;
+    // The capability is a property of the installation, not of the platform:
+    // `aura_scan_host` is built next to the application on every platform, and a
+    // build that did not produce it (or a user who deleted it) falls back to the
+    // in-process scan with a warning instead of failing.
+    const std::string helper = helperExecutablePath("aura_scan_host");
+    return !helper.empty() && filesystem::exists(helper);
 }
 
 void PluginScanner::startScan(PluginDatabase& database,
@@ -515,7 +676,7 @@ void PluginScanner::startScan(PluginDatabase& database,
         };
         std::vector<Candidate> candidates;
         for (const auto& directory : options_.searchPaths) {
-            for (const auto& file : filesystem::listFiles(directory, {"vst3", "clap"}, true)) {
+            for (const auto& file : findBundleCandidates(directory)) {
                 const std::string extension = filesystem::extensionLower(file);
                 const PluginFormat format =
                     extension == "vst3" ? PluginFormat::Vst3
@@ -538,30 +699,64 @@ void PluginScanner::startScan(PluginDatabase& database,
             if (progress)
                 progress(index, static_cast<int>(candidates.size()), candidate.path);
 
-            PluginDescriptor descriptor;
-            descriptor.id = std::string(pluginFormatName(candidate.format)) + ":" +
-                            hashPath(candidate.path);
-            descriptor.path = candidate.path;
-            descriptor.format = candidate.format;
-            descriptor.name = filesystem::fs::path(candidate.path).stem().string();
-            descriptor.vendor = "Unknown";
-            // Honest state: the metadata is discovered, but this build cannot
-            // host it yet, so the descriptor says so instead of pretending.
-            const bool canHost = hostSupports(candidate.format);
-            descriptor.incompatible = !canHost;
-            descriptor.incompatibleReason =
-                canHost ? "" : std::string(pluginFormatName(candidate.format)) +
-                                   " hosting is not enabled in this build (see docs/PLUGIN_HOST.md)";
-            descriptor.lastScanTimeMs =
-                static_cast<std::int64_t>(Log::nowMs());
-            descriptor.categoryId = inferCategory(descriptor.category, false);
+            // User data (favourites, category overrides, the blacklist) is keyed by
+            // descriptor id and never touched by a scan, so a rescan cannot lose it.
+            const auto stage = [&](PluginDescriptor descriptor) {
+                const PluginUserData data = database.userData(descriptor.id);
+                if (options_.skipBlacklisted && data.blacklisted)
+                    return;
+                database.upsert(std::move(descriptor));
+            };
 
-            const PluginUserData data = database.userData(descriptor.id);
-            if (options_.skipBlacklisted && data.blacklisted)
+#if defined(AURA_ENABLE_VST3)
+            if (candidate.format == PluginFormat::Vst3) {
+                ScanOutcome outcome = scanVst3Bundle(candidate.path, options_.scanInChildProcess,
+                                                     options_.timeoutSecondsPerPlugin);
+                if (outcome.descriptors.empty()) {
+                    errors_.push_back(candidate.path + ": " + outcome.failureReason);
+                    PluginDescriptor quarantined = quarantineDescriptor(
+                        candidate.path, PluginFormat::Vst3, outcome.failureReason);
+                    stage(std::move(quarantined));
+                } else {
+                    // A bundle is a container: several classes, each its own
+                    // descriptor. Entries that belong to this bundle but were not
+                    // found this time are dropped, which is how a plug-in update
+                    // that removes a class cleans up after itself.
+                    std::vector<std::string> seen;
+                    for (auto& descriptor : outcome.descriptors) {
+                        descriptor.lastScanTimeMs = static_cast<std::int64_t>(Log::nowMs());
+                        seen.push_back(descriptor.id);
+                        stage(descriptor);
+                    }
+                    for (const auto& existing : database.descriptors()) {
+                        if (existing.path != candidate.path)
+                            continue;
+                        const bool stillThere =
+                            std::find(seen.begin(), seen.end(), existing.id) != seen.end();
+                        if (!stillThere)
+                            database.remove(existing.id);
+                    }
+                }
+                progress_.store(static_cast<float>(index) /
+                                    static_cast<float>(std::max<std::size_t>(1, candidates.size())),
+                                std::memory_order_relaxed);
                 continue;
+            }
+#endif
 
-            database.upsert(std::move(descriptor));
-            progress_.store(static_cast<float>(index) / static_cast<float>(std::max<std::size_t>(1, candidates.size())),
+            // Formats this build cannot host are still listed, with the reason, so
+            // the browser can tell "not installed" apart from "not supported here".
+            const bool canHost = hostSupports(candidate.format);
+            PluginDescriptor descriptor = quarantineDescriptor(
+                candidate.path, candidate.format,
+                canHost ? std::string{} :
+                          std::string(pluginFormatName(candidate.format)) +
+                              " hosting is not enabled in this build (see docs/PLUGIN_HOST.md)");
+            descriptor.incompatible = !canHost;
+            descriptor.categoryId = inferPluginCategory(descriptor.category, false);
+            stage(std::move(descriptor));
+            progress_.store(static_cast<float>(index) /
+                                static_cast<float>(std::max<std::size_t>(1, candidates.size())),
                             std::memory_order_relaxed);
         }
 
@@ -599,9 +794,15 @@ AuraResult<std::unique_ptr<PluginInstance>> instantiatePlugin(const PluginDescri
             "descriptor: " + descriptor.id +
                 " (enable AURA_ENABLE_VST3 / AURA_ENABLE_CLAP and see docs/PLUGIN_HOST.md)"));
     }
+#if defined(AURA_ENABLE_VST3)
+    if (descriptor.format == PluginFormat::Vst3)
+        return vst3::instantiate(descriptor, sampleRate, maxBlockSize, numChannels);
+#endif
     return failure(makeError(ErrorCode::NotImplemented,
-                             "Plug-in instantiation is scheduled for milestone M6",
-                             descriptor.id));
+                             "Plug-in instantiation for this format is not compiled into this "
+                             "build",
+                             std::string(pluginFormatName(descriptor.format)) + ": " +
+                                 descriptor.id));
 }
 
 } // namespace aura::plugin

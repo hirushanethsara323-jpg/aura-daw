@@ -20,14 +20,16 @@
 //   PluginInstance - a loaded plug-in owned by the engine
 //   PluginChain    - ordered instance list with wet/dry and bypass per slot
 //
-// PROCESS ISOLATION: this V1 hosts plug-ins IN-PROCESS. A crashing plug-in can
-// therefore take the audio engine down; the mitigation is the scanner running
-// in a child process (the *scan* phase, which is where most crashes happen) and
-// a documented plan for a sandboxed host process. This limitation is explicit
-// and is what the architecture is designed around: PluginInstance is already a
-// separate object with an explicit ABI boundary, so moving it into a helper
-// process later is a matter of swapping the transport (shared memory + IPC)
-// rather than restructuring the engine.
+// PROCESS ISOLATION: scanning runs the untrusted half - a bundle's static
+// initialisers and its factory - in a child process (tools/scan_host, driven by
+// PluginScanner with a wall-clock limit per bundle), so a plug-in that hangs or
+// crashes while being scanned costs a process, not the session. Loading a plug-in
+// into the mixer still happens IN-PROCESS: a plug-in that crashes while it is
+// being used takes the audio engine down with it. That limitation is explicit, it
+// is what the architecture is shaped around, and PluginInstance is the boundary
+// that makes the fix mechanical rather than structural - moving a loaded plug-in
+// into a helper process later is a matter of swapping the transport (shared
+// memory + IPC) instead of rewriting the mixer. See docs/PLUGIN_HOST.md.
 // ============================================================================
 #pragma once
 
@@ -38,6 +40,7 @@
 #include <unordered_map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "aura/core/Errors.hpp"
@@ -67,6 +70,13 @@ enum class PluginCategory : std::int32_t {
 };
 
 const char* pluginCategoryName(PluginCategory category) noexcept;
+
+/// Best-effort classification of a vendor's category string, because vendors are
+/// inconsistent and a plug-in that refuses to say what it is still has to appear
+/// in the right folder. Only ever used as a suggestion: the user's override wins
+/// (PluginUserData::categoryOverride), and nothing functional depends on it.
+[[nodiscard]] PluginCategory inferPluginCategory(std::string_view categoryText,
+                                                 bool isInstrument) noexcept;
 
 /// Everything known about a plug-in without loading it.
 struct PluginDescriptor {
@@ -233,16 +243,18 @@ private:
     std::vector<Slot> instances_;
 };
 
-/// Scanner. Runs in a worker thread and, where supported, in a CHILD PROCESS so
-/// a crashing plug-in cannot take AURA down. `scanInChildProcess` reports the
-/// honest capability: on Windows the out-of-process scanner is implemented with
-/// CreateProcess + a shared-memory result pipe (M6), and until it lands the
-/// in-process scan is used with a watchdog timeout.
+/// Scanner. Runs in a worker thread and, by default, in a CHILD PROCESS so a
+/// crashing plug-in cannot take AURA down: `tools/scan_host` loads the bundle,
+/// the parent kills it if it exceeds `timeoutSecondsPerPlugin`, and a bundle that
+/// hangs or dies is quarantined (recorded as unscannable, with the reason) rather
+/// than retried. `scanInChildProcess = false` runs the same scan in-process -
+/// faster, and the only option in a build that has no helper next to the
+/// executable - which is why the option is documented rather than hidden.
 class PluginScanner {
 public:
     struct Options {
         std::vector<std::string> searchPaths; ///< default VST3/CLAP locations
-        bool scanInChildProcess = false;
+        bool scanInChildProcess = true;
         int timeoutSecondsPerPlugin = 10;
         bool skipBlacklisted = true;
     };
@@ -280,8 +292,10 @@ private:
     std::thread worker_;
 };
 
-/// Loads a plug-in for real. Returns a clear, honest error when AURA was built
-/// without the corresponding SDK (which is the default until M6 lands).
+/// Loads a plug-in for real, through the adapter for its format. Returns a clear,
+/// honest error when AURA was built without the corresponding SDK - the default
+/// build hosts VST 3 (AURA_ENABLE_VST3), and the error says so by name rather
+/// than pretending the plug-in is broken.
 AuraResult<std::unique_ptr<PluginInstance>> instantiatePlugin(const PluginDescriptor& descriptor,
                                                               double sampleRate,
                                                               int maxBlockSize,

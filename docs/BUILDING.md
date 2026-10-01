@@ -40,7 +40,7 @@ ctest --test-dir build-ci-windows --output-on-failure
 | `AURA_FETCH_DEPS` | ON | fetch Catch2 via `FetchContent`; OFF uses `AURA_CATCH2_DIR` |
 | `AURA_CATCH2_DIR` | — | path to a local Catch2 v3 checkout (used when `AURA_FETCH_DEPS=OFF`) |
 | `AURA_ENABLE_ASIO` | OFF | compile the ASIO backend; needs `AURA_ASIO_SDK_DIR` |
-| `AURA_ENABLE_VST3` | OFF | compile the VST3 adapter; needs `AURA_VST3_SDK_DIR` |
+| `AURA_ENABLE_VST3` | OFF | compile the VST 3 adapter; the SDK is fetched at a pinned tag (see below) |
 | `AURA_WITH_JUCE` | OFF | JUCE-based plug-in editor adapter (**AGPLv3** — read ADR-0006 first) |
 | `AURA_WARNINGS_AS_ERRORS` | OFF | `/W4 /WX` on MSVC, `-Wall -Wextra -Werror` elsewhere |
 | `AURA_ENABLE_SANITIZERS` | OFF | ASan + UBSan on GCC/Clang; ASan on MSVC (which switches to the dynamic CRT and drops `/RTC1`, both of which the sanitizer requires) |
@@ -50,6 +50,32 @@ ctest --test-dir build-ci-windows --output-on-failure
 Changing a source list: the libraries use **explicit file lists** in
 `CMakeLists.txt` (no globbing). Adding `src/foo/Bar.cpp` means adding it to the
 right list; a missing entry shows up as an undefined symbol at link time.
+
+## Building with VST 3 hosting
+
+```bash
+cmake -S . -B build-vst3 -DAURA_ENABLE_VST3=ON -DAURA_BUILD_TESTS=ON \
+      -DAURA_WARNINGS_AS_ERRORS=ON
+cmake --build build-vst3 -j
+cd build-vst3 && ctest --output-on-failure        # 143 tests, six of them VST 3
+```
+
+* The SDK is **fetched, not vendored**: `FetchContent` clones
+  `steinbergmedia/vst3sdk` at the pinned tag (`AURA_VST3_SDK_TAG` in
+  `CMakeLists.txt`) with `GIT_SHALLOW` and four submodules (`base`, `cmake`,
+  `pluginterfaces`, `public.sdk`) — about 38 MB instead of the full 247 MB.
+* Air-gapped or patched-SDK builds point CMake at an existing checkout instead:
+  `-DFETCHCONTENT_SOURCE_DIR_VST3SDK=/path/to/vst3sdk`. Nothing else changes.
+* VSTGUI and the SDK's examples are forced off; AURA does not use them, and the SDK's
+  sample plug-ins cannot be built without VSTGUI.
+* Only `public.sdk/source/vst/vstsinglecomponenteffect.cpp` and the platform module
+  loader are compiled from the SDK into the host bridge (see
+  [`PLUGIN_HOST.md`](PLUGIN_HOST.md)); the SDK's headers are included as `SYSTEM`
+  because AURA builds with `-Werror` and the gate is a statement about AURA's code.
+* The test suite loads a **real** bundle that this build produces
+  (`AuraTestPlugin.vst3`, built from `tests/plugin/vst3/`), so an enabled build
+  verifies the adapter against the format rather than against a mock. On platforms
+  where the fixture's bundle layout is not implemented yet, configure warns.
 
 ## Offline / air-gapped builds
 

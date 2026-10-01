@@ -12,7 +12,7 @@ honest answer to "where is it?".
 | **M3** | Graph and streams | `GraphNode`/`GraphPlan`/`GraphBuilder` (Kahn ordering, cycle reporting), fan-in, sends, plan publication with a grace window, memory and disk streams | graph tests + streaming regression green | ✅ **done** |
 | **M4** | Audio engine | `IAudioDevice`, WASAPI shared/exclusive, ASIO (opt-in), mock device, transport, clip/instrument rendering, recording engine, mixer, offline renderer + stems | engine tests green incl. allocation regression and latency accounting | ✅ **done** |
 | **M5** | Performance & hardening | `bench/` suite, session-scale benchmark, sanitizer runs (GCC/Clang **and** MSVC ASan), fuzzing the manifest and WAV parsers, memory-growth soak, delay compensation for dry paths, SIMD decision | budgets in `PERFORMANCE.md` met on the reference profile; no ASan/UBSan findings | 🔨 **one item left** — every gate is green: benchmarks, GCC/Clang sanitizers, the MSVC ASan row (*Windows Debug-ASan*), the fuzz campaign and the soak harness. The outstanding item is the 8-hour soak campaign, which `PERFORMANCE.md` marks as a plan rather than a measurement |
-| **M6** | Plug-in hosting | VST3 adapter (`AURA_ENABLE_VST3`), out-of-process scanner with timeouts and blacklist, parameter and latency discovery, generic editor fallback | a real VST3 loads, processes and restores state; a crashed scanner does not take the host down | ⏳ |
+| **M6** | Plug-in hosting | VST3 adapter (`AURA_ENABLE_VST3`), out-of-process scanner with timeouts and blacklist, parameter and latency discovery, generic editor fallback | a real VST3 loads, processes and restores state; a crashed scanner does not take the host down | 🔨 **acceptance verified, packaging left** — the adapter loads a real bundle built from this repository, processes through the engine's own buffers, converts parameters through the plug-in's ranges, reports latency (and re-reads it on `kLatencyChanged` and after a state restore) and round-trips state; the scanner runs the bundle in `aura_scan_host`, times it out and quarantines it with a reason. `build-vst3` (VST3 ON): 143/143 tests. Left: a CI job that builds the VST3 configuration (today CI builds the default, VST3-off one), the fixture's Windows/macOS bundle layout, and the editor *window* (the shell is M9/M10) |
 | **M7** | Plug-in sandbox + CLAP | out-of-process audio host, CLAP adapter, latency re-reporting through the graph | a plug-in crash is survivable; CLAP plug-ins process | ⏳ |
 | **M8** | ASIO + device hardening | ASIO backend (GPLv3 SDK path), device matrix testing, sample-rate-change recovery, hot-plug UX | ASIO device at ≤ 64-frame buffers without xruns on the reference machine | ⏳ |
 | **M9** | Desktop shell | Win32 + Direct2D window, widget toolkit, theme, DPI awareness, transport + track headers + mixer, preferences, device panel | opens, plays, records, saves a project; idle CPU < 2 % | ⏳ |
@@ -20,7 +20,28 @@ honest answer to "where is it?".
 | **M11** | Packaging & release | Inno Setup installer, portable ZIP, checksums, GPL source tarball, release workflow; installer/update story per `research/PACKAGING_RESEARCH.md` | signed (or checksummed) artefacts attached to a tagged release | ⏳ |
 | **M12** | v1.0 polish | localisation (Sinhala/Tamil/German/Japanese catalogues), crash-report flow, docs pass, performance soak, plugin compatibility fixes | documented release criteria met; no known data-loss defects | ⏳ |
 
-## Near-term work queue (M5)
+## Work queue (M6, in progress)
+
+1. ~~VST3 adapter: scan, load, process, parameters, latency, state~~ **done** — see
+   [`PLUGIN_HOST.md`](PLUGIN_HOST.md). Three real host bugs were found by the tests
+   and fixed: `ProcessData` buffer ownership (a plug-in silently processed silence),
+   the state-restore offset (every reload would have lost plug-in state) and latency
+   not being re-read after a restart notification.
+2. **CI has to build it.** Every CI job currently configures the default VST3-off
+   build, so the flagship feature of this milestone is verified only on a developer
+   machine. Add a `AURA_ENABLE_VST3=ON` row (Linux first: it fetches the pinned SDK,
+   builds and runs the whole suite).
+3. **Windows is the product platform.** The adapter is platform-neutral, but the test
+   fixture's bundle layout exists for Linux only, and the child process has no job
+   object yet - both are M6 work, not "later".
+4. **Sidechain and aux buses are wired to silence**, not routed: the graph needs a
+   sidechain send before a compressor's detector means anything (M7/M8).
+5. **Sample-accurate parameter changes.** Block-aligned today; the format supports
+   per-sample points and the transfer ring is already in place.
+6. **A plug-in that misreports latency** needs the manual override the M5 research
+   called for.
+
+## Work queue (M5)
 
 1. `bench/` micro-benchmarks + the session-scale benchmark; publish numbers in
    `PERFORMANCE.md`.
@@ -43,8 +64,9 @@ honest answer to "where is it?".
    compensation in `GraphBuilder::build()`, delays in `dsp::DelayLine`, verified by
    impulse measurements in `tests/graph/DelayCompensationTests.cpp`; see
    `research/LATENCY_COMPENSATION_RESEARCH.md`. Remaining follow-ups: manual latency
-   override for plug-ins that misreport, and wiring VST3's `kLatencyChanged`
-   notification to a plan rebuild (M6/M7).
+   override for plug-ins that misreport, and turning the adapter's latency re-read
+   into a graph-plan rebuild (the adapter re-reports on `kLatencyChanged` and after a
+   state restore as of M6; the plan still has to be rebuilt from it).
 6. ~~SIMD decision, made from profile data rather than taste.~~ **done** — measured:
    hand-written AVX2 is worth 1.5–2× on elementwise loops that are ~3 % of a session,
    so it is deferred; the profile pointed at the per-sample recursions instead, which

@@ -44,6 +44,8 @@ option(AURA_ENABLE_RT_ASSERTS "Enable real-time thread assertions in all builds"
 option(AURA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(AURA_ENABLE_SANITIZERS "Enable ASan (and UBSan on GCC/Clang) where supported" OFF)
 option(AURA_BUILD_FUZZERS "Build the libFuzzer targets in fuzz/ (requires Clang)" OFF)
+option(AURA_ENABLE_VST3 "Host VST 3 plug-ins (fetches the Steinberg VST 3 SDK at a pinned tag; MIT licensed since 3.8)" OFF)
+option(AURA_ENABLE_CLAP "Host CLAP plug-ins (reserved: the adapter is not written yet)" OFF)
 
 # ---------------------------------------------------------------------------
 # Shared compile settings
@@ -195,6 +197,7 @@ add_library(aura_engine STATIC
   src/project/Project.cpp
   src/commands/Commands.cpp
   src/plugin/PluginHost.cpp
+  src/plugin/ChildProcess.cpp
   src/automation/Automation.cpp
   src/timeline/Timeline.cpp
   src/engine/AudioEngine.cpp
@@ -214,6 +217,100 @@ if(WIN32)
   # winmm - waveOut-style fallback and the timer resolution calls in the clock
   # (uuid is not needed: every IID is resolved at compile time through __uuidof.)
   target_link_libraries(aura_engine PRIVATE ole32 avrt winmm)
+endif()
+
+# ---------------------------------------------------------------------------
+# Module: VST 3 hosting (optional, off by default)
+#
+# Off by default on purpose: fetching a third-party SDK is a decision, not a
+# side effect of configuring the project. With it off, the host still builds,
+# still scans (listing what it cannot host, with the reason) and still runs its
+# full test suite - which is what keeps the default build honest and fast.
+#
+# The SDK is FETCHED AT A PINNED TAG, never vendored: this repository carries no
+# Steinberg tree, the licence text stays where its authors put it, and the build
+# is reproducible from the tag. Only the four submodules hosting actually needs
+# are cloned (base, cmake, pluginterfaces, public.sdk) - VSTGUI, the tutorials and
+# the plug-in examples are not part of a host build.
+# ---------------------------------------------------------------------------
+if(AURA_ENABLE_VST3)
+  include(FetchContent)
+  set(SMTG_ENABLE_VSTGUI_SUPPORT OFF CACHE BOOL "" FORCE)
+  set(SMTG_ENABLE_VST3_PLUGIN_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES OFF CACHE BOOL "" FORCE)
+  # The pin is one variable so the status line, the docs and the fetch cannot drift
+  # apart. VST 3.8.1 build 84 is MIT-licensed (VST 3.8 relicensed the SDK) and is
+  # the version the adapter in src/plugin/vst3 is written against.
+  set(AURA_VST3_SDK_TAG "v3.8.1_build_84")
+  FetchContent_Declare(vst3sdk
+    GIT_REPOSITORY https://github.com/steinbergmedia/vst3sdk.git
+    GIT_TAG ${AURA_VST3_SDK_TAG}
+    GIT_SHALLOW TRUE
+    GIT_PROGRESS TRUE
+    GIT_SUBMODULES base cmake pluginterfaces public.sdk)
+  FetchContent_MakeAvailable(vst3sdk)
+
+  target_sources(aura_engine PRIVATE
+    src/plugin/vst3/Vst3Scan.cpp
+    src/plugin/vst3/Vst3Instance.cpp
+    $<TARGET_OBJECTS:aura_vst3_sdk_bridge>)
+
+  # PlugProvider is the SDK's own component/controller wiring: it creates both
+  # halves, connects them over ConnectionProxy and hands them back. It is NOT part
+  # of the SDK's `sdk_hosting` library in 3.8.1 - the SDK compiles it per hosting
+  # example - so a host that wants it names the file. Writing our own would mean
+  # re-implementing the connection plumbing the format requires.
+  #
+  # It is compiled in its own object library so it does not inherit AURA's warning
+  # gate: -Wshadow/-Wconversion/-Werror are a statement about our code, and a
+  # third-party file that does not meet them is not a reason to weaken the gate.
+  # The same is true of three more SDK sources a host needs and the SDK's libraries
+  # do not carry: the platform module loader (dlopen/LoadLibrary) and the in-memory
+  # IBStream used for plug-in state.
+  add_library(aura_vst3_sdk_bridge OBJECT
+    ${vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+    ${vst3sdk_SOURCE_DIR}/public.sdk/source/common/memorystream.cpp)
+  if(APPLE)
+    target_sources(aura_vst3_sdk_bridge PRIVATE
+      ${vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/module_mac.mm)
+  elseif(WIN32)
+    target_sources(aura_vst3_sdk_bridge PRIVATE
+      ${vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/module_win32.cpp)
+  else()
+    target_sources(aura_vst3_sdk_bridge PRIVATE
+      ${vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/module_linux.cpp)
+  endif()
+  target_include_directories(aura_vst3_sdk_bridge SYSTEM PRIVATE ${vst3sdk_SOURCE_DIR})
+  target_compile_features(aura_vst3_sdk_bridge PRIVATE cxx_std_17)
+  target_link_libraries(aura_vst3_sdk_bridge PRIVATE sdk_hosting sdk_common ${CMAKE_DL_LIBS})
+  target_compile_definitions(aura_engine PUBLIC AURA_ENABLE_VST3=1)
+  # sdk_hosting - module loading, PlugProvider, ProcessData, parameter changes.
+  # sdk_common  - MemoryStream and the string conversions a host needs.
+  # PUBLIC, not PRIVATE: a static library's consumers have to resolve the symbols
+  # its objects reference, so the scanner helper and the tests linking Aura::Engine
+  # need the SDK's libraries too. Hiding them here only moves the link error one
+  # target further out.
+  target_link_libraries(aura_engine PUBLIC sdk_hosting sdk_common)
+  # SYSTEM on purpose: the SDK's headers are third-party code, and AURA builds with
+  # -Werror/-W4. Gating our build on Steinberg's warning style would mean either
+  # turning the gate off globally or patching a fetched tree - both worse than
+  # saying "these are not our warnings".
+  target_include_directories(aura_engine SYSTEM PRIVATE ${vst3sdk_SOURCE_DIR})
+  message(STATUS "AURA: VST 3 hosting enabled (VST 3 SDK ${AURA_VST3_SDK_TAG})")
+endif()
+
+# ---------------------------------------------------------------------------
+# Scanner helper process
+#
+# Built in every configuration, even one without any SDK: it is the supervisor's
+# other half, and a build that cannot produce it would silently lose the only
+# crash isolation the scanner has.
+# ---------------------------------------------------------------------------
+add_executable(aura_scan_host tools/scan_host/ScanHost.cpp)
+set_target_properties(aura_scan_host PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+target_link_libraries(aura_scan_host PRIVATE Aura::Engine Aura::Core)
+if(AURA_ENABLE_VST3)
+  target_include_directories(aura_scan_host PRIVATE src/plugin/vst3)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -262,3 +359,4 @@ message(STATUS "  app (JUCE)    : ${AURA_BUILD_APP}")
 message(STATUS "  alloc tracking: ${AURA_ENABLE_ALLOC_TRACKING}")
 message(STATUS "  Werror        : ${AURA_WARNINGS_AS_ERRORS}")
 message(STATUS "  fuzzers       : ${AURA_BUILD_FUZZERS}")
+message(STATUS "  VST 3 hosting : ${AURA_ENABLE_VST3}")

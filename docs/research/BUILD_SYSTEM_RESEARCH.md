@@ -37,7 +37,7 @@ include rules, not by link boundaries.
 | `AURA_BUILD_BENCHMARKS` | OFF | micro-benchmarks (`bench/`) |
 | `AURA_FETCH_DEPS` | ON | fetch Catch2 with `FetchContent`; OFF uses a local checkout |
 | `AURA_ENABLE_ASIO` | OFF | compile the ASIO backend (needs `AURA_ASIO_SDK_DIR`) |
-| `AURA_ENABLE_VST3` | OFF | compile the VST3 adapter (needs `AURA_VST3_SDK_DIR`) |
+| `AURA_ENABLE_VST3` | OFF | compile the VST3 adapter (fetches the SDK at a pinned tag; `FETCHCONTENT_SOURCE_DIR_VST3SDK` for a local checkout — implemented in M6, see `PLUGIN_HOST.md`) |
 | `AURA_WITH_JUCE` | OFF | optional JUCE-based plug-in editor adapter (AGPLv3!) |
 | `AURA_ENABLE_ALLOC_TRACKING` | per config | global `operator new` counter used by the RT regression test |
 | `AURA_ENABLE_RT_ASSERTS` | per config | asserts that fail when an RT rule is broken |

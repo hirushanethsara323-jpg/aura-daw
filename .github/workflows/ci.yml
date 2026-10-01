@@ -12,7 +12,11 @@
 #   4. static analysis is clean on the fast job;
 #   5. sanitizers find nothing on the fast job;
 #   6. the parsers survive a bounded libFuzzer run (and the soak harness survives
-#      two minutes of continuous streaming).
+#      two minutes of continuous streaming);
+#   7. the VST 3 configuration - the one that hosts third-party code - builds and
+#      passes, in the `vst3` job. It is the only job that fetches the Steinberg SDK,
+#      and it exists because a milestone whose flagship feature is only ever built on
+#      a developer's machine is a milestone with an unverified feature.
 #
 # Runners have 2 cores: the build is -j 2 and the FetchContent directory is
 # cached, otherwise the jobs spend their budget recompiling Catch2.
@@ -93,6 +97,65 @@ jobs:
           path: |
             build/Testing/Temporary/LastTest.log
             build/CMakeFiles/CMakeConfigureLog.yaml
+
+  # VST 3 hosting (M6). The default build deliberately has no SDK, so this row is
+  # the only place the adapter is compiled, linked and *run* against a real bundle:
+  # the test fixture (tests/plugin/vst3) is built into a proper .vst3 bundle by the
+  # build itself, and the suite loads it through the same code path a user's plug-in
+  # takes. The last step scans that bundle with the helper binary and checks the
+  # JSON, which is the half of the milestone that runs in a separate process.
+  #
+  # Windows is the platform that ships, and a Windows row belongs here; it is
+  # waiting on the fixture's Windows bundle layout (Contents/x86_64-win) rather than
+  # on the adapter, which is platform-neutral. Tracked in docs/ROADMAP.md.
+  vst3:
+    name: Linux VST 3 hosting
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-13
+      # The Steinberg SDK is fetched at the pinned tag (38 MB, shallow, four
+      # submodules). Caching the FetchContent tree is what keeps this job honest
+      # about its budget on a 2-core runner.
+      - name: Cache FetchContent
+        uses: actions/cache@v4
+        with:
+          path: build-vst3/_deps
+          key: linux-vst3-deps-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt') }}
+      - name: Configure
+        run: |
+          cmake -S . -B build-vst3 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=g++-13 \
+            -DAURA_BUILD_TESTS=ON \
+            -DAURA_WARNINGS_AS_ERRORS=ON \
+            -DAURA_ENABLE_VST3=ON
+      - name: Build
+        run: cmake --build build-vst3 -j 2
+      - name: Test
+        run: ctest --test-dir build-vst3 --output-on-failure
+      - name: The scanner helper really scans a real bundle
+        run: |
+          ./build-vst3/tools/aura_scan_host --version
+          ./build-vst3/tools/aura_scan_host \
+            --scan build-vst3/tests/vst3/AuraTestPlugin.vst3 --out "$RUNNER_TEMP/scan.json"
+          python3 - <<'PYEOF'
+          import json, os
+          document = json.load(open(os.environ["RUNNER_TEMP"] + "/scan.json"))
+          assert document["ok"], document
+          assert document["classes"], document
+          print("scanned:", document["classes"][0]["name"], document["classes"][0]["id"])
+          PYEOF
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-linux-vst3
+          path: |
+            build-vst3/Testing/Temporary/LastTest.log
+            build-vst3/CMakeFiles/CMakeConfigureLog.yaml
 
   # Fuzzing (issue #3). These are deliberately SHORT, bounded runs: the point is
   # that every push feeds hostile bytes to the parsers through a real libFuzzer
