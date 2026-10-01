@@ -251,8 +251,12 @@ Status AudioDeviceManager::openInternal(const AudioDeviceInfo& info,
         used.bufferSize = nearest;
     }
 
+    // Build the new device before retiring the current one: if the driver
+    // refuses to open (rate/buffer unsupported, endpoint busy) the existing
+    // stream keeps running and the caller can simply report the error.
+    std::unique_ptr<engine::IAudioDevice> candidate;
     switch (info.driver) {
-    case DriverType::Mock: device_ = std::make_unique<MockAudioDevice>(info); break;
+    case DriverType::Mock: candidate = std::make_unique<MockAudioDevice>(info); break;
 #if defined(_WIN32)
     case DriverType::WasapiShared:
     case DriverType::WasapiExclusive: {
@@ -261,7 +265,7 @@ Status AudioDeviceManager::openInternal(const AudioDeviceInfo& info,
                                            info.driver == DriverType::WasapiExclusive);
         if (!opened)
             return opened;
-        device_ = std::move(wasapi);
+        candidate = std::move(wasapi);
         break;
     }
 #endif
@@ -274,9 +278,17 @@ Status AudioDeviceManager::openInternal(const AudioDeviceInfo& info,
                                  "No backend is available for this device", info.name));
     }
 
+    // Retiring the old device detaches it from the engine first (see
+    // releaseDevice): the engine must never be left holding a freed pointer.
+    releaseDevice();
+    device_ = std::move(candidate);
+
     if (engine_) {
         const Status started = engine_->initialise(device_.get(), used);
         if (!started) {
+            // initialise() can fail after it has published the device pointer
+            // (graph rebuild, device->start()), so detach before destroying.
+            engine_->detachDevice();
             device_.reset();
             return started;
         }
@@ -288,11 +300,22 @@ Status AudioDeviceManager::openInternal(const AudioDeviceInfo& info,
     return success();
 }
 
-void AudioDeviceManager::close() {
+void AudioDeviceManager::releaseDevice() noexcept {
+    // The engine holds a raw pointer into the device, so it must be told before
+    // the device is destroyed. Detach first (while the device is still alive),
+    // then stop and destroy it. Without this the engine's own shutdown() would
+    // call stop() on a freed object.
+    if (engine_)
+        engine_->detachDevice();
     if (device_) {
         device_->stop();
         device_.reset();
     }
+}
+
+void AudioDeviceManager::close() {
+    releaseDevice();
+    currentId_.clear();
 }
 
 int AudioDeviceManager::totalLatencySamples() const {

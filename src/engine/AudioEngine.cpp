@@ -87,6 +87,18 @@ Status AudioEngine::initialise(IAudioDevice* device, const EngineSettings& setti
     return success();
 }
 
+void AudioEngine::detachDevice() noexcept {
+    // shutdown() while the device is still alive: it stops streaming (so no
+    // device callback can be mid-block) and drops the engine's pointer. The
+    // contract is that the owner calls this BEFORE destroying the device, so
+    // reaching the device here is legitimate; doing it in this order means a
+    // later shutdown()/setSettings() on the engine is a no-op instead of a
+    // use-after-free on an object the owner has already deleted.
+    if (device_ != nullptr)
+        AURA_LOG_INFO(kCategory, "Detaching device %s from the engine", device_->name().c_str());
+    shutdown();
+}
+
 void AudioEngine::shutdown() {
     if (device_) {
         device_->stop();

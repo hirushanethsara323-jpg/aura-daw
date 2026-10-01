@@ -133,6 +133,11 @@ public:
 private:
     Status openInternal(const AudioDeviceInfo& info, const engine::EngineSettings& settings);
 
+    /// Detaches the device from the engine, stops it and destroys it. Safe to
+    /// call with no device open. NEVER destroy the device without going through
+    /// here: the engine keeps a raw pointer to it.
+    void releaseDevice() noexcept;
+
     std::vector<AudioDeviceInfo> devices_;
     std::unique_ptr<engine::IAudioDevice> device_;
     std::string currentId_;

@@ -76,6 +76,8 @@ properties; the engine tests check the dynamic ones.
 | `WaveformCache` levels | worker thread (append + `bucketsReady`) | UI thread |
 | `DiskStream` ring | reader thread (write) | audio thread (read) |
 | `RecordingEngine` writer buffers | audio thread (append) | writer/control thread (drain) |
+| `IAudioDevice` (WASAPI/mock/offline) | `AudioDeviceManager` (creates, stops, destroys) | engine (borrowed raw pointer, released with `detachDevice()`) |
+| `UndoHistory` stacks | control thread (`beginTransaction`/`addEdit`/`commitTransaction`) | control thread (`undo`/`redo`); re-entrant edits from inside an undo are refused |
 
 Each header states its thread contract in the class comment (`Control thread only.`,
 `RT-safe.`, `Called by the audio thread.`). That is a maintenance rule: a comment

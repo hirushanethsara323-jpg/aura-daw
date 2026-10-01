@@ -124,6 +124,22 @@ will be recorded here and in `LICENSES.md` at the same time.
 
 * `AudioDeviceManager` enumerates, opens, closes and switches devices and owns the
   mock backend; it never runs on the audio thread.
+* **The manager owns the device's lifetime, the engine only borrows it.** The engine
+  holds a raw `IAudioDevice*` (the audio thread must not touch a `shared_ptr`'s
+  refcount), so the engine has one extra entry point that exists purely for the
+  ownership handshake: `detachDevice()`. It stops streaming *while the device is
+  still alive* and drops the pointer, after which every device-touching call
+  (`shutdown()`, `setSettings()`, a later `initialise()`) is a no-op `nullptr` check
+  instead of a use-after-free. `AudioDeviceManager::releaseDevice()` (used by
+  `close()`, by re-open and by the destructor) detaches first, then stops and
+  destroys. Destroying a device any other way is a bug, and
+  `tests/api/DeviceLifetimeTests.cpp` is the regression test that says so — it was
+  written from a real AddressSanitizer report (`heap-use-after-free` in
+  `AudioEngine::shutdown() -> device_->stop()`), found by running the soak harness
+  under ASAN rather than by reading the code.
+* Opening a device builds the new backend *before* retiring the old one, so a driver
+  that refuses the request (busy endpoint, unsupported rate) leaves the current
+  stream running and returns an error the UI can show.
 * The engine asks for a sample rate and buffer size and always reads back what the
   device **granted** (drivers refuse politely and silently; sizing from the request
   is how buffer overruns are born).

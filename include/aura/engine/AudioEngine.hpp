@@ -94,6 +94,19 @@ public:
     Status initialise(IAudioDevice* device, const EngineSettings& settings);
     void shutdown();
 
+    /// Releases the engine's reference to the device *without* touching it.
+    ///
+    /// OWNERSHIP CONTRACT: the engine never owns the device and never deletes it.
+    /// Whoever does own it (AudioDeviceManager, a test harness) MUST call this
+    /// before destroying the device: afterwards every device-touching entry point
+    /// is a no-op, so a later shutdown()/setSettings() cannot dereference freed
+    /// memory. Call it while the device is still alive -- it only clears the
+    /// pointer, it does not stop streaming (shutdown() does that).
+    void detachDevice() noexcept;
+
+    /// The device currently attached (nullptr when detached). Diagnostics/tests.
+    [[nodiscard]] IAudioDevice* currentDevice() const noexcept { return device_; }
+
     /// Attaches the project whose tracks/clips are played. The engine never owns
     /// the project.
     void setProject(project::Project* project);
