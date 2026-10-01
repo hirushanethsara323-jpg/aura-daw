@@ -207,6 +207,14 @@ jobs:
           - name: Release-no-deps
             build_type: Release
             extra: "-DAURA_FETCH_DEPS=OFF"
+          # MSVC's address sanitizer (M5's last acceptance item). Its own row rather
+          # than a flag on the Debug row: it builds with the dynamic CRT and without
+          # /RTC1, so it is a different configuration, and a failure in it has to be
+          # legible next to the two rows that must keep passing.
+          - name: Debug-ASan
+            build_type: Debug
+            extra: "-DAURA_ENABLE_SANITIZERS=ON"
+            asan: "ON"
     steps:
       - uses: actions/checkout@v4
 
@@ -242,6 +250,11 @@ jobs:
 
       - name: Test
         shell: bash
+        env:
+          # halt_on_error makes the first finding fail the run immediately instead of
+          # printing a report and continuing to the next test, and the symbolizer
+          # turns the stack into file:line for code built with /Zi.
+          ASAN_OPTIONS: ${{ matrix.asan == 'ON' && 'halt_on_error=1:detect_leaks=0:print_summary=1' || '' }}
         run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
 
       - name: Upload logs on failure

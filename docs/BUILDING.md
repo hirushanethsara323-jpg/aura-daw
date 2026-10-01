@@ -43,7 +43,7 @@ ctest --test-dir build-ci-windows --output-on-failure
 | `AURA_ENABLE_VST3` | OFF | compile the VST3 adapter; needs `AURA_VST3_SDK_DIR` |
 | `AURA_WITH_JUCE` | OFF | JUCE-based plug-in editor adapter (**AGPLv3** — read ADR-0006 first) |
 | `AURA_WARNINGS_AS_ERRORS` | OFF | `/W4 /WX` on MSVC, `-Wall -Wextra -Werror` elsewhere |
-| `AURA_ENABLE_SANITIZERS` | OFF | ASAN + UBSAN (GCC/Clang) |
+| `AURA_ENABLE_SANITIZERS` | OFF | ASan + UBSan on GCC/Clang; ASan on MSVC (which switches to the dynamic CRT and drops `/RTC1`, both of which the sanitizer requires) |
 | `AURA_ENABLE_ALLOC_TRACKING` | ON in Debug/tests | global allocation counter used by the RT regression test |
 | `AURA_ENABLE_RT_ASSERTS` | ON in Debug/tests | fails loudly when an RT rule is broken |
 

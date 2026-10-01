@@ -42,7 +42,7 @@ option(AURA_BUILD_APP "Build the desktop application (requires JUCE; Windows)" O
 option(AURA_ENABLE_ALLOC_TRACKING "Track heap allocations for RT-safety tests" OFF)
 option(AURA_ENABLE_RT_ASSERTS "Enable real-time thread assertions in all builds" OFF)
 option(AURA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
-option(AURA_ENABLE_SANITIZERS "Enable ASan/UBSan when supported (GCC/Clang only)" OFF)
+option(AURA_ENABLE_SANITIZERS "Enable ASan (and UBSan on GCC/Clang) where supported" OFF)
 option(AURA_BUILD_FUZZERS "Build the libFuzzer targets in fuzz/ (requires Clang)" OFF)
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,8 @@ if(MSVC)
     /MP /utf-8 /EHsc
     $<$<CONFIG:Release>:/Oi /Ot>
     $<$<CONFIG:RelWithDebInfo>:/Zi /O2>
-    $<$<CONFIG:Debug>:/Od /RTC1>)
+    $<$<CONFIG:Debug>:/Od>
+    $<$<AND:$<CONFIG:Debug>,$<NOT:$<BOOL:${AURA_ENABLE_SANITIZERS}>>>:/RTC1>)
   target_compile_definitions(aura_project_options INTERFACE
     WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS UNICODE _UNICODE
   # Windows 10 is the floor (AURA ships for 10/11): pinning it means the SDK does
@@ -69,6 +70,18 @@ if(MSVC)
   # Static CRT by default: a DAW ships as a self-contained install and must not
   # depend on a specific VC++ redistributable being present.
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+  if(AURA_ENABLE_SANITIZERS)
+    # MSVC's address sanitizer ships as a runtime *DLL* and its allocator hooks only
+    # exist in the dynamic CRT, so the static CRT has to give way for this
+    # configuration. Everything else about the build stays identical, which is what
+    # makes the run worth doing: it exercises the same code the Release build ships.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL$<$<CONFIG:Debug>:Debug>")
+    target_compile_options(aura_project_options INTERFACE /fsanitize=address /Zi)
+    target_link_options(aura_project_options INTERFACE
+      /fsanitize=address /INCREMENTAL:NO)
+    message(STATUS "AURA: MSVC address sanitizer enabled (dynamic CRT, /INCREMENTAL:NO)")
+  endif()
 else()
   # The list mirrors the MSVC /W4 set: -Wunused-parameter stays ON because MSVC
   # reports C4100 at /W4 (and /WX turns it into an error), so an unused parameter
