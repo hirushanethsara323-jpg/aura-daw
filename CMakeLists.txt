@@ -43,6 +43,7 @@ option(AURA_ENABLE_ALLOC_TRACKING "Track heap allocations for RT-safety tests" O
 option(AURA_ENABLE_RT_ASSERTS "Enable real-time thread assertions in all builds" OFF)
 option(AURA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(AURA_ENABLE_SANITIZERS "Enable ASan/UBSan when supported (GCC/Clang only)" OFF)
+option(AURA_BUILD_FUZZERS "Build the libFuzzer targets in fuzz/ (requires Clang)" OFF)
 
 # ---------------------------------------------------------------------------
 # Shared compile settings
@@ -225,6 +226,9 @@ endif()
 if(AURA_BUILD_BENCHMARKS)
   add_subdirectory(bench)
 endif()
+if(AURA_BUILD_FUZZERS)
+  add_subdirectory(fuzz)
+endif()
 
 # ---------------------------------------------------------------------------
 # Status summary
@@ -236,3 +240,4 @@ message(STATUS "  tests         : ${AURA_BUILD_TESTS}")
 message(STATUS "  app (JUCE)    : ${AURA_BUILD_APP}")
 message(STATUS "  alloc tracking: ${AURA_ENABLE_ALLOC_TRACKING}")
 message(STATUS "  Werror        : ${AURA_WARNINGS_AS_ERRORS}")
+message(STATUS "  fuzzers       : ${AURA_BUILD_FUZZERS}")

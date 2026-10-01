@@ -64,6 +64,94 @@ TEST_CASE("WAV files survive a full write/read round trip", "[audio][file]") {
     }
 }
 
+TEST_CASE("A WAV whose header over-claims is read at its real length", "[audio][file][fuzz][regression]") {
+    // REGRESSION, found by the WAV fuzzer (tests/core/FuzzSmokeTests.cpp): nothing
+    // compared the data chunk's claimed size against the size of the file. A 60-byte
+    // file claiming 0xFFFFFF00 bytes of 24-bit stereo made readFileToPlanar() resize
+    // its buffers to ~1.4 billion frames per channel - about 5.7 GB each - and the
+    // process was killed. Any file from the internet could do it, and so could a
+    // recording interrupted midway, which is the case the clamp has to stay
+    // *useful* for: the frames that were written must still be readable.
+    const std::string path = "/tmp/aura-wav-overclaim.wav";
+
+    // A valid 100-frame 24-bit stereo file, then the data chunk size field is
+    // rewritten to claim far more than the file holds.
+    const int frames = 100;
+    const std::uint32_t bytesPerFrame = 2 * 3;
+    const std::uint32_t realDataBytes = static_cast<std::uint32_t>(frames) * bytesPerFrame;
+    const std::uint32_t claimedDataBytes = 0xFFFFFF00u;
+
+    std::vector<std::uint8_t> file;
+    const auto put32 = [&file](std::uint32_t value) {
+        file.push_back(static_cast<std::uint8_t>(value & 0xFF));
+        file.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFF));
+        file.push_back(static_cast<std::uint8_t>((value >> 16) & 0xFF));
+        file.push_back(static_cast<std::uint8_t>((value >> 24) & 0xFF));
+    };
+    const auto put16 = [&file](std::uint16_t value) {
+        file.push_back(static_cast<std::uint8_t>(value & 0xFF));
+        file.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFF));
+    };
+    const auto putId = [&file](const char* id) {
+        for (int i = 0; i < 4; ++i)
+            file.push_back(static_cast<std::uint8_t>(id[i]));
+    };
+
+    putId("RIFF");
+    put32(36 + claimedDataBytes); // the RIFF size is a claim too
+    putId("WAVE");
+    putId("fmt ");
+    put32(16);
+    put16(1); // PCM
+    put16(2); // channels
+    put32(48000);
+    put32(48000 * bytesPerFrame);
+    put16(static_cast<std::uint16_t>(bytesPerFrame));
+    put16(24);
+    putId("data");
+    put32(claimedDataBytes);
+    for (std::uint32_t i = 0; i < realDataBytes; ++i)
+        file.push_back(static_cast<std::uint8_t>(i & 0xFF));
+
+    {
+        std::FILE* out = std::fopen(path.c_str(), "wb");
+        REQUIRE(out != nullptr);
+        REQUIRE(std::fwrite(file.data(), 1, file.size(), out) == file.size());
+        std::fclose(out);
+    }
+
+    auto info = media::probeFile(path);
+    REQUIRE(info.hasValue());
+    INFO("claimed 24-bit stereo frames: " << (claimedDataBytes / bytesPerFrame)
+                                          << ", real: " << frames);
+    REQUIRE(info.value().lengthFrames == frames); // clamped to the file, not the claim
+    REQUIRE(info.value().truncated);
+    REQUIRE(info.value().numChannels == 2);
+
+    // The audio that does exist is still readable: the clamp must not turn an
+    // interrupted recording into an unreadable file.
+    auto planar = media::readFileToPlanar(path);
+    REQUIRE(planar.hasValue());
+    REQUIRE(planar.value()->size() == 2);
+    REQUIRE(planar.value()->at(0).size() == static_cast<std::size_t>(frames));
+    REQUIRE(planar.value()->at(1).size() == static_cast<std::size_t>(frames));
+
+    // A file whose header over-claims by a little (a truncated tail) behaves the
+    // same way, and a file with a corrupt sample rate is refused rather than
+    // believed.
+    std::vector<std::uint8_t> corruptRate = file;
+    corruptRate[24] = 0xFF; // sample rate low byte of the fmt chunk
+    corruptRate[25] = 0xFF;
+    corruptRate[26] = 0xFF;
+    corruptRate[27] = 0xFF;
+    const std::string corruptPath = "/tmp/aura-wav-corrupt-rate.wav";
+    std::FILE* out = std::fopen(corruptPath.c_str(), "wb");
+    REQUIRE(out != nullptr);
+    REQUIRE(std::fwrite(corruptRate.data(), 1, corruptRate.size(), out) == corruptRate.size());
+    std::fclose(out);
+    REQUIRE_FALSE(media::probeFile(corruptPath).hasValue());
+}
+
 TEST_CASE("Float WAV export is bit-exact", "[audio][file]") {
     const std::string path = "/tmp/aura-wav-float.wav";
     std::vector<std::vector<float>> channels(2, std::vector<float>(1024));

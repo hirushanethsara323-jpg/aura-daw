@@ -1,0 +1,16 @@
+{
+  "versionMajor": 1,
+  "versionMinor": 0,
+  "name": "Seed Session",
+  "sampleRate": 48000.0,
+  "tracks": [
+    {"id": 1, "kind": "audio", "name": "Audio 1", "volumeDb": 0.0, "pan": 0.0,
+     "routing": {"destination": 0, "sends": []}, "inserts": [], "clips": []},
+    {"id": 2, "kind": "bus", "name": "Bus", "volumeDb": -6.0, "pan": 0.25,
+     "routing": {"destination": 0, "sends": []}, "inserts": [], "clips": []}
+  ],
+  "master": {"volumeDb": 0.0},
+  "mediaPool": {"items": []},
+  "markers": [{"positionTicks": 0, "name": "Start"}],
+  "tempoMap": {"entries": [{"positionTicks": 0, "bpm": 120.0, "numerator": 4, "denominator": 4}]}
+}

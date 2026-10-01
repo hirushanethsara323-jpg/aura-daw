@@ -73,6 +73,21 @@ constexpr std::uint8_t kGuidPcmPrefix[16] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
 constexpr std::uint8_t kGuidFloatPrefix[16] = {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
                                                0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71};
 
+/// Size of an open file, without disturbing its position more than necessary.
+/// Used to check the header's claims against reality (see the `data` chunk walk).
+std::int64_t sizeOfOpenFile(std::FILE* file) noexcept {
+    if (!file)
+        return 0;
+    const long position = std::ftell(file);
+    if (position < 0)
+        return 0;
+    if (std::fseek(file, 0, SEEK_END) != 0)
+        return 0;
+    const long size = std::ftell(file);
+    std::fseek(file, position, SEEK_SET);
+    return size > 0 ? static_cast<std::int64_t>(size) : 0;
+}
+
 bool chunkEquals(const ChunkHeader& chunk, const char* id) noexcept {
     return std::memcmp(chunk.id, id, 4) == 0;
 }
@@ -296,8 +311,28 @@ AuraResult<AudioFileInfo> AudioFileReader::open(const std::string& path) {
             info.dataBytes = (chunk.size == 0xFFFFFFFFu && rf64DataSize > 0)
                                  ? static_cast<std::uint32_t>(std::min<std::uint64_t>(rf64DataSize, 0xFFFFFFFFu))
                                  : chunk.size;
+
+            // The header is a *claim*; the file is the fact. A data chunk that
+            // claims more bytes than exist is what an interrupted recording looks
+            // like, and it is also the cheapest way to make a reader allocate
+            // gigabytes from a 44-byte file (found by the WAV fuzzer: a mutated
+            // header killed the process with an allocation of ~5.7 GB per channel).
+            // So: clamp to what the file actually holds and say that we did.
+            const std::int64_t fileSize = sizeOfOpenFile(impl_->file);
+            const std::int64_t available = fileSize > info.dataOffset ? fileSize - info.dataOffset : 0;
+            if (static_cast<std::int64_t>(info.dataBytes) > available) {
+                info.dataBytes = static_cast<std::uint32_t>(std::min<std::int64_t>(available, 0xFFFFFFFF));
+                info.truncated = true;
+                AURA_LOG_WARN(kCategory,
+                              "WAV data chunk claims more audio than the file holds; "
+                              "reading %lld bytes instead of %u (%s)",
+                              static_cast<long long>(available), chunk.size, path.c_str());
+            }
+
             const int bytesPerFrame = info.numChannels * (info.bitsPerSample / 8);
-            info.lengthFrames = bytesPerFrame > 0 ? static_cast<std::int64_t>(info.dataBytes / static_cast<std::uint32_t>(bytesPerFrame)) : 0;
+            info.lengthFrames = bytesPerFrame > 0
+                                    ? static_cast<std::int64_t>(info.dataBytes / static_cast<std::uint32_t>(bytesPerFrame))
+                                    : 0;
             break; // data found: done with the header walk
         }
 
@@ -316,6 +351,13 @@ AuraResult<AudioFileInfo> AudioFileReader::open(const std::string& path) {
         close();
         return failure(makeError(ErrorCode::ParseError, "Implausible channel count",
                                  std::to_string(info.numChannels)));
+    }
+    // 1 MHz is already beyond any audio interface; a larger figure is a corrupt
+    // header, and believing it turns every later division into nonsense.
+    if (info.sampleRate == 0 || info.sampleRate > 1000000u) {
+        close();
+        return failure(makeError(ErrorCode::ParseError, "Implausible sample rate",
+                                 std::to_string(info.sampleRate)));
     }
     if (!info.isValid()) {
         close();

@@ -71,6 +71,7 @@ target_link_libraries(aura_test_support PUBLIC Aura::Core Aura::Dsp Catch2::Catc
 # ---------------------------------------------------------------------------
 add_executable(aura_tests
   core/CoreTests.cpp
+  core/FuzzSmokeTests.cpp
   time/TimeTests.cpp
   dsp/DspTests.cpp
   dsp/BlockStateTests.cpp
@@ -80,12 +81,18 @@ add_executable(aura_tests
   midi/MidiTests.cpp
   project/ProjectTests.cpp
   engine/EngineTests.cpp
+  api/DeviceLifetimeTests.cpp
   commands/CommandsTests.cpp
   automation/AutomationTests.cpp
   timeline/TimelineTests.cpp
   plugin/PluginTests.cpp
 )
 target_link_libraries(aura_tests PRIVATE Aura::Engine Aura::Dsp Aura::Core aura_test_support)
+
+# The portable fuzz smoke test reuses the seeds and the temporary-file helper from
+# fuzz/FuzzSupport.hpp so the deterministic test and the libFuzzer targets start
+# from the same inputs (a bug found by one reproduces in the other).
+target_include_directories(aura_tests PRIVATE ${CMAKE_SOURCE_DIR})
 
 include(Catch)
 catch_discover_tests(aura_tests

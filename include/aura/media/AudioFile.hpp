@@ -48,6 +48,11 @@ struct AudioFileInfo {
     std::uint32_t dataBytes = 0;
     bool isFloat = false;
     bool isRf64 = false;                ///< WAVE_FORMAT_EXTENSIBLE wrapper
+    /// The data chunk claims more bytes than the file holds. That is what an
+    /// interrupted recording looks like: the frames that were written are real and
+    /// playable, so the file opens with the length it actually has - it is only the
+    /// *claim* that is wrong. Reported so a caller can say so.
+    bool truncated = false;
     std::uint32_t channelMask = 0;
     std::string codecName = "PCM";
     bool isValid() const noexcept { return sampleRate > 0 && numChannels > 0 && lengthFrames >= 0; }

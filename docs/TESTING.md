@@ -18,7 +18,7 @@ python3 tools/rt_audit.py .                    # the static RT audit, by hand
 `ctest` runs **111 entries**: 109 Catch2 test cases plus two static-analysis tests
 (`rt_audit` and `include_audit`). Current status: all passing.
 
-## The five layers
+## The layers
 
 ### 1. Unit tests
 
@@ -126,6 +126,77 @@ Three mechanisms:
    (`error C2039: 'mutex': is not a member of 'std'`). An escape carries a reason:
    `#include <vector>   // include-audit: allow <chrono> - arrives via Time.hpp`.
 
+### 6. Fuzzing
+
+Question answered: *does the parser survive input that was written by an attacker,
+a truncated download or a half-flushed disk?*
+
+Three libFuzzer targets cover every byte range that arrives from outside the
+process — the project JSON reader, the `.aura` manifest reader and the WAV reader
+(`fuzz/fuzz_json.cpp`, `fuzz_manifest.cpp`, `fuzz_wav.cpp`). They call the **real**
+entry points (`json::parse`, `Project::load`, `media::probeFile`,
+`AudioFileReader::open`, `readFileToPlanar`); there is no second implementation to
+drift. The invariants they assert are the ones a DAW actually cares about:
+arbitrary bytes produce an error or a well-formed result whose claims match the
+data, serialisation is deterministic, a round trip re-parses, and a reader that
+promises N channels × M frames can hand over exactly that many without reading
+outside the file.
+
+Two halves, on purpose:
+
+| Half | Where | Compiler | Runs |
+|------|-------|----------|------|
+| libFuzzer targets | `fuzz/`, CI job *Fuzzing* | Clang (`-fsanitize=fuzzer,address,undefined`) | bounded `-max_total_time=90` per target on every push |
+| Portable property tests | `tests/core/FuzzSmokeTests.cpp`, tag `[fuzz]` | any (MSVC included) | every `ctest` run, from the same committed seeds |
+
+The committed corpora (`fuzz/corpus/{json,manifest,wav}`) are the curated seed
+minimum: every run starts from inputs that were already known to be interesting
+instead of from noise. A longer campaign is a local command, not a CI step:
+
+```bash
+cmake -S . -B build-fuzz -DCMAKE_CXX_COMPILER=clang++ -DAURA_BUILD_FUZZERS=ON \
+      -DAURA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build-fuzz -j
+mkdir -p /tmp/corpus && cp -r fuzz/corpus/* /tmp/corpus/     # keep the tree clean:
+                                                             # libFuzzer writes to the corpus
+./build-fuzz/fuzz/aura_fuzz_wav /tmp/corpus/wav -max_total_time=3600 -artifact_prefix=/tmp/
+```
+
+A finding arrives as `crash-<sha1>` / `timeout-<sha1>` / `leak-<sha1>` next to the
+artifact prefix. Reproduce it with the same binary and the file as its argument,
+then add the file to the corpus and a named test to `FuzzSmokeTests.cpp` — a crash
+that is not turned into a deterministic test is a bug that will come back. The
+first real finding was exactly that: a WAV whose header claimed ~5.7 GB per
+channel from a 100-frame file, which made `readFileToPlanar()` size its buffers
+from the claim alone (fixed in `src/audio/AudioFile.cpp`: the data chunk is clamped
+to the file size, `AudioFileInfo::truncated` is set, and the sample rate must be
+plausible; the regression test pins both).
+
+### 7. Soak (memory growth)
+
+Question answered: *does a session that runs for hours stay the same size?*
+
+`bench/aura_soak` (issue #4) drives the **real** engine through the real device
+callback — clips streaming, EQ + compressor per track, a reverb aux bus, periodic
+`rebuildGraph()`, optional recording takes that open and close files — and samples
+resident memory. The first `max(30 s, 10 %)` is warm-up and is thrown away; the
+report compares the mean RSS of the first half of the run against the second half
+and converts the difference to **MB/hour**, which is the only unit in which a slow
+leak is visible (1 MB/hour is ~3 KB/s — invisible in any single-minute view).
+
+```bash
+cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DAURA_BUILD_TESTS=OFF \
+      -DAURA_BUILD_BENCHMARKS=ON
+cmake --build build-bench -j 2 --target aura_soak
+./build-bench/bench/aura_soak --minutes 480 --tracks 16 --record \
+    --rebuild-every 120 --interval 60 --max-growth-mb-per-hour 2 --json soak.json
+```
+
+Exit codes: `0` pass, `1` the growth trend exceeded `--max-growth-mb-per-hour`,
+`2` bad arguments — so it works as a gate, not only as a report. CI runs two
+minutes of it in the Linux Debug job; the 8-hour campaign and its numbers are in
+[`PERFORMANCE.md`](PERFORMANCE.md).
+
 ## Running the layers you care about
 
 | Goal | Command |
@@ -134,6 +205,8 @@ Three mechanisms:
 | Fast feedback while editing DSP | `./tests/aura_tests "[dsp]"` |
 | Anything touching the engine | `./tests/aura_tests "[engine]"` |
 | RT safety only | `ctest -R realtime_audit` |
+| Fuzzing, no Clang needed | `./tests/aura_tests "[fuzz]"` |
+| Untrusted-input parsing under a real fuzzer | CI job *Fuzzing*, or the local campaign above |
 | Investigate a failure | `./tests/aura_tests "case name" -s` |
 
 ## Conventions
@@ -156,8 +229,9 @@ Three mechanisms:
 
 | Gap | Plan |
 |-----|------|
-| Stress: long sessions, 500+ clips, 8-hour recordings, memory growth over hours | M5 |
-| Fuzzing: manifest parser, WAV chunk parser | M5 |
+| Stress: 500+ clips, an 8-hour recording in one take | M5 (clips scale is benchmarked; the single-take length is measured in `PERFORMANCE.md`) |
+| Fuzzing | **done** — 3 libFuzzer targets in CI + portable `[fuzz]` tests |
+| Memory growth over hours | **done** — `bench/aura_soak`, 2 minutes in CI, 8 hours on a workstation |
 | MSVC-sanitizer run in CI | M5 |
 | GUI/interaction tests (they do not exist because the shell does not exist) | M9 |
 | Real audio hardware in CI (no sound card on runners) | never — mitigated by the mock device and by manual device-matrix testing |

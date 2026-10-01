@@ -11,7 +11,7 @@ honest answer to "where is it?".
 | **M2** | DSP suite | 14 processors + biquad/smoothing primitives, denormal protection, analytic and property tests | unit tests green; limiter ceiling and EQ magnitude verified | ✅ **done** |
 | **M3** | Graph and streams | `GraphNode`/`GraphPlan`/`GraphBuilder` (Kahn ordering, cycle reporting), fan-in, sends, plan publication with a grace window, memory and disk streams | graph tests + streaming regression green | ✅ **done** |
 | **M4** | Audio engine | `IAudioDevice`, WASAPI shared/exclusive, ASIO (opt-in), mock device, transport, clip/instrument rendering, recording engine, mixer, offline renderer + stems | engine tests green incl. allocation regression and latency accounting | ✅ **done** |
-| **M5** | Performance & hardening | `bench/` suite, session-scale benchmark, sanitizer runs, fuzzing the manifest and WAV parsers, memory-growth soak, delay compensation for dry paths, SIMD decision | budgets in `PERFORMANCE.md` met on the reference profile; no ASAN/UBSAN findings | ⏳ next |
+| **M5** | Performance & hardening | `bench/` suite, session-scale benchmark, sanitizer runs, fuzzing the manifest and WAV parsers, memory-growth soak, delay compensation for dry paths, SIMD decision | budgets in `PERFORMANCE.md` met on the reference profile; no ASAN/UBSAN findings | 🔨 **nearly done** — benchmarks, ASAN/UBSAN job, fuzzing and the soak harness all landed and are green; the 8-hour campaign and the MSVC-ASAN attempt are the remainder |
 | **M6** | Plug-in hosting | VST3 adapter (`AURA_ENABLE_VST3`), out-of-process scanner with timeouts and blacklist, parameter and latency discovery, generic editor fallback | a real VST3 loads, processes and restores state; a crashed scanner does not take the host down | ⏳ |
 | **M7** | Plug-in sandbox + CLAP | out-of-process audio host, CLAP adapter, latency re-reporting through the graph | a plug-in crash is survivable; CLAP plug-ins process | ⏳ |
 | **M8** | ASIO + device hardening | ASIO backend (GPLv3 SDK path), device matrix testing, sample-rate-change recovery, hot-plug UX | ASIO device at ≤ 64-frame buffers without xruns on the reference machine | ⏳ |
@@ -24,9 +24,21 @@ honest answer to "where is it?".
 
 1. `bench/` micro-benchmarks + the session-scale benchmark; publish numbers in
    `PERFORMANCE.md`.
-2. ASAN/UBSAN job findings triaged; MSVC ASAN attempt.
-3. Fuzz the manifest parser (`project.json`) and the WAV chunk parser.
-4. Memory-growth soak: 8 hours of simulated playback with recording on and off.
+2. ~~ASAN/UBSAN job findings triaged~~ **done** — the Linux *Debug+Sanitizers* job is
+   green, and running the new soak harness under ASAN found a real
+   use-after-free in the device/engine ownership handshake (fixed in
+   `AudioEngine::detachDevice()` + `AudioDeviceManager::releaseDevice()`,
+   regression test in `tests/api/DeviceLifetimeTests.cpp`). Remaining: an MSVC
+   ASAN attempt on the Windows runner.
+3. ~~Fuzz the manifest parser (`project.json`) and the WAV chunk parser~~ **done** —
+   three libFuzzer targets (`fuzz/fuzz_{json,manifest,wav}.cpp`) with committed
+   seed corpora, a bounded CI job, and a portable `[fuzz]` test that runs under
+   MSVC as well. The first finding was a WAV header that over-claimed its data
+   size (fixed; the regression test pins it).
+4. ~~Memory-growth soak: 8 hours of simulated playback with recording on and off~~
+   **harness done, campaign running** — `bench/aura_soak` (trend in MB/hour, exit
+   code as a gate, JSON checkpointed every sample), 2 minutes of it in CI; the
+   8-hour campaign is reported in `PERFORMANCE.md`.
 5. ~~Delay compensation: insert the dry-path delays.~~ **done** — per-edge
    compensation in `GraphBuilder::build()`, delays in `dsp::DelayLine`, verified by
    impulse measurements in `tests/graph/DelayCompensationTests.cpp`; see

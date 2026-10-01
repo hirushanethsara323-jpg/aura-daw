@@ -10,7 +10,9 @@
 #   2. tests pass, including the static real-time-safety audit;
 #   3. the engine still builds and tests with every optional dependency OFF;
 #   4. static analysis is clean on the fast job;
-#   5. sanitizers find nothing on the fast job.
+#   5. sanitizers find nothing on the fast job;
+#   6. the parsers survive a bounded libFuzzer run (and the soak harness survives
+#      two minutes of continuous streaming).
 #
 # Runners have 2 cores: the build is -j 2 and the FetchContent directory is
 # cached, otherwise the jobs spend their budget recompiling Catch2.
@@ -41,7 +43,10 @@ jobs:
         include:
           - name: Debug
             build_type: Debug
-            extra: ""
+            # Benchmarks are built in this row only: the memory-growth soak needs
+            # the aura_soak harness, and it has no business inside the sanitizer
+            # build (which is already the slowest job in the matrix).
+            extra: "-DAURA_BUILD_BENCHMARKS=ON"
           - name: Debug+Sanitizers
             build_type: Debug
             extra: "-DAURA_ENABLE_SANITIZERS=ON"
@@ -68,6 +73,18 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: Real-time safety audit
         run: python3 tools/rt_audit.py . --list
+      # Two minutes of continuous streaming: not a soak in its own right (the
+      # 8-hour campaign is run on a workstation, see docs/PERFORMANCE.md), but
+      # enough to catch a leak that grows by the megabyte per minute and enough to
+      # keep the harness itself from rotting. The harness drives the real engine -
+      # clips, inserts, a reverb aux bus, periodic graph rebuilds - as fast as the
+      # null device allows, which at 256 frames and this CPU is roughly three
+      # orders of magnitude more audio than real time.
+      - name: Memory-growth soak (2 minutes)
+        if: matrix.name == 'Debug'
+        run: |
+          ./build/bench/aura_soak --minutes 2 --tracks 8 --interval 15 \
+            --max-growth-mb-per-hour 4 --workdir "$RUNNER_TEMP/aura-soak"
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -76,6 +93,58 @@ jobs:
           path: |
             build/Testing/Temporary/LastTest.log
             build/CMakeFiles/CMakeConfigureLog.yaml
+
+  # Fuzzing (issue #3). These are deliberately SHORT, bounded runs: the point is
+  # that every push feeds hostile bytes to the parsers through a real libFuzzer
+  # build (so a regression cannot hide behind "it only breaks under the fuzzer"),
+  # not that CI replaces a fuzzing campaign. libFuzzer needs Clang for its runtime
+  # and is skipped with a warning on any other compiler, which is why this job also
+  # enables -DAURA_WARNINGS_AS_ERRORS=ON: the fuzz targets are the newest code in
+  # the tree and the warnings they can produce are worth failing on.
+  #
+  # A longer campaign (and what to do with a crash) is documented in
+  # docs/TESTING.md; the deterministic half of the same coverage - the property
+  # that untrusted bytes produce an error and not a crash - runs as
+  # aura_tests "[fuzz]" in the Linux and Windows jobs, so MSVC gets fuzzed too.
+  fuzz:
+    name: Fuzzing (clang + libFuzzer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+      - name: Configure
+        run: |
+          cmake -S . -B build-fuzz -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DAURA_BUILD_TESTS=OFF \
+            -DAURA_BUILD_BENCHMARKS=OFF \
+            -DAURA_BUILD_FUZZERS=ON \
+            -DAURA_WARNINGS_AS_ERRORS=ON \
+            -DAURA_FUZZ_TMPDIR="$RUNNER_TEMP"
+      - name: Build the fuzz targets
+        run: cmake --build build-fuzz -j 2
+      - name: Fuzz (bounded runs)
+        run: |
+          set -eu
+          for target in aura_fuzz_json aura_fuzz_manifest aura_fuzz_wav; do
+            corpus="fuzz/corpus/${target#aura_fuzz_}"
+            echo "::group::$target"
+            ./build-fuzz/fuzz/$target "$corpus" \
+              -max_total_time=90 -timeout=10 -rss_limit_mb=1024 \
+              -print_final_stats=1 -artifact_prefix="$RUNNER_TEMP/fuzz-"
+            echo "::endgroup::"
+          done
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-artifacts
+          path: |
+            /tmp/fuzz-*
+            build-fuzz/fuzz/*.log
 
   static-analysis:
     name: clang-tidy
@@ -124,7 +193,10 @@ jobs:
         include:
           - name: Debug
             build_type: Debug
-            extra: ""
+            # Benchmarks are built in this row only: the memory-growth soak needs
+            # the aura_soak harness, and it has no business inside the sanitizer
+            # build (which is already the slowest job in the matrix).
+            extra: "-DAURA_BUILD_BENCHMARKS=ON"
           - name: Release
             build_type: Release
             extra: ""
@@ -197,7 +269,10 @@ jobs:
             if ! head -n 12 "$f" | grep -q "SPDX-License-Identifier: GPL-3.0-or-later"; then
               echo "missing SPDX header: $f"; missing=1
             fi
-          done < <(find include src tests tools bench scripts -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.py' -o -name '*.sh' \) 2>/dev/null)
+          # fuzz/ is part of this scan on purpose: it is the newest source
+          # directory and the one a contributor is most likely to copy a file
+          # into without the header.
+          done < <(find include src tests tools bench fuzz scripts -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.py' -o -name '*.sh' \) 2>/dev/null)
           exit $missing
       - name: Research documents are listed in the index
         run: |

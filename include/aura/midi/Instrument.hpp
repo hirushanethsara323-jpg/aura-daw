@@ -180,9 +180,11 @@ private:
     double osc2DetuneCents_ = 7.0;
     float osc2Level_ = 0.35f;
     float subLevel_ = 0.2f;
-    double filterCutoff_ = 6000.0;
-    double filterResonance_ = 0.7;
-    float filterEnvelopeAmount_ = 0.35f;
+    // The subtractive filter stage reads these; they are stored now so the
+    // parameter surface (and saved patches) does not change when it lands.
+    [[maybe_unused]] double filterCutoff_ = 6000.0;
+    [[maybe_unused]] double filterResonance_ = 0.7;
+    [[maybe_unused]] float filterEnvelopeAmount_ = 0.35f;
     float level_ = 0.7f;
     double pitchBendRange_ = 2.0;
 

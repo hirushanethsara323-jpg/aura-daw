@@ -46,8 +46,12 @@
 
 namespace aura::audioio {
 namespace {
-constexpr const char* kCategory = "AudioIO.WASAPI";
-}
+// Only the Windows half of this file logs. On other platforms the constant is
+// unused, which clang reports as -Wunused-const-variable; the attribute keeps the
+// file's shape identical on every platform (it still compiles to an empty object)
+// instead of wrapping the namespace in a guard and risking a brace mismatch.
+[[maybe_unused]] constexpr const char* kCategory = "AudioIO.WASAPI";
+} // namespace
 
 #if defined(_WIN32)
 

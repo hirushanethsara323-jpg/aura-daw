@@ -11,7 +11,7 @@ behind the numbers (and the SIMD decision) is in
 | Audio callback time | ≤ 50 % of the block period at 64 voices on a 2-core laptop CPU | **measured 9.2 %** of a 64-frame block period (`dsp/instrument-64-voices/64`); the engine also reports `cpuLoad`/`peakCpuLoad` live |
 | Idle cost | < 2 % CPU with a 24-track session open and stopped | by design: silent, tail-less nodes are skipped and the UI is event-driven |
 | UI frame | ≤ 2 ms at 1080p (24-track arrangement), ≤ 8 ms with meters running | M9 (shell) |
-| Memory | < 400 MB with a 24-track 2-hour project, media streaming | M5 measurement |
+| Memory | < 400 MB with a 24-track 2-hour project, media streaming | **measured during streaming**: 20 MB resident (8 tracks) and 37 MB (16 tracks, recording on) in the soak; media is streamed through a fixed window, so project *length* does not add resident memory. The explicit 24-track/2-hour run is still pending |
 | Disk streaming | 2-hour stereo 24-bit, zero xruns at 512 frames on a 5400 rpm disk | streaming implemented; measurement M5 |
 | Peak-cache build | 1-hour stereo 48 kHz in < 20 s, cancellable, progressive | implemented progressively (`bucketsReady`) |
 | Session cost | a 16-track session with EQ + compressor on every track ≤ 50 % of the block period | **measured 7.8 %**; a 48-track session with the same inserts uses **23.1 %** (`bench/`) |
@@ -165,6 +165,64 @@ unchanged). The reason is structural: a session with no latent processor compute
 delay of 0 for every edge, which takes the plain summing path with one extra
 `nodeId` comparison, and the per-edge lookup is a binary search over a table sorted
 once in `prepare()` rather than a scan.
+
+## Memory growth under load: the soak
+
+A benchmark answers "how fast"; a soak answers "does it stay the same". They need
+different harnesses, so `bench/aura_soak` is separate from `bench/aura_bench`.
+It drives a real 16-track session through the real engine (clips streaming, EQ +
+compressor on every track, a reverb on an aux bus fed by a send, the graph rebuilt
+every two minutes, recording opening and closing takes) and samples resident memory
+once a minute. Warm-up is excluded, the steady samples are split in half, and the
+difference is reported as **MB/hour** — the unit in which a slow leak is visible.
+
+```bash
+cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DAURA_BUILD_TESTS=OFF \
+      -DAURA_BUILD_BENCHMARKS=ON
+cmake --build build-bench -j 2 --target aura_soak
+./build-bench/bench/aura_soak --minutes 480 --tracks 16 --record \
+    --rebuild-every 120 --interval 60 --json bench/results/soak-8h.json
+```
+
+The harness drives a device that never sleeps, so it processes on the order of
+**10⁴× real time** here: a one-minute run is several days of audio through the
+graph. That is deliberate — the paths that are allowed to allocate (graph rebuild,
+plan publication, media open/close, take write) get exercised hundreds of thousands
+of times instead of a handful — with one consequence worth knowing about: a take
+bounded by wall-clock time would be gigabytes long, so takes are bounded by
+**frames written** (`--take-seconds`, default 30 s of audio) with a hard
+`--max-take-megabytes` guard and the files deleted after closing. The first
+unattended run of this harness wrote 16 GB in five minutes and taught us that;
+the fix is in the harness, and the guard is there so the mistake cannot recur
+quietly.
+
+| Run | Wall | Block | Tracks | Blocks | Audio processed | RSS (first half → second half) | Growth | Verdict |
+|---|---|---|---|---|---|---|---|
+| CI step (2 min) | 120 s | 256 | 8, no recording | 10 583 907 | 15.7 h | 20 → 20 MB | +0.00 MB/hour | **PASS** |
+| Local soak, recording on | 60 s | 256 | 16 | 4 348 485 | 6.4 h | 37 → 37 MB | +0.00 MB/hour | **PASS** |
+| ASAN build | 9 s | 256 | 4 | 13 281 | 0.02 h | 56 → 56 MB | +0.00 MB/hour | **PASS** (no ASAN/UBSAN finding) |
+| 8-hour campaign | in progress | 256 | 16 | — | — | — | — | writing `bench/results/soak-8h.json` |
+
+The first two rows are the numbers the CI gate and a one-minute local run produce;
+they are the *floor* of what is checked automatically. The 8-hour row is the M5
+acceptance campaign and is filled in from its JSON when it finishes.
+
+The 8-hour JSON is written with `"complete": false` after every sample and
+`"complete": true` at the end, so an interrupted campaign still leaves the trend
+behind instead of leaving nothing.
+
+### What the soak found
+
+Running it under AddressSanitizer (`-DAURA_ENABLE_SANITIZERS=ON`) immediately
+produced a `heap-use-after-free` in `AudioEngine::shutdown() -> device_->stop()`:
+the harness destroyed its device before the engine that was pointing at it. The
+same shape existed in the application — `AudioDeviceManager::close()` did
+`device_.reset()` and left the engine holding a dangling raw pointer, so an engine
+shutdown or settings change after closing a device would have dereferenced freed
+memory. The owners now call `AudioEngine::detachDevice()` before destroying, the
+manager builds the new backend before retiring the old one, and
+`tests/api/DeviceLifetimeTests.cpp` pins all of it. It is the clearest argument for
+why M5 asked for a soak: no benchmark would ever have found it.
 
 ## Measuring it yourself
 
