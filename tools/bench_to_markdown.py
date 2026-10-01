@@ -90,7 +90,7 @@ def budget_report(results: list[dict]) -> str:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Publish aura_bench numbers as Markdown.")
     parser.add_argument("json", type=pathlib.Path)
-    parser.add_argument("--group", help="only this group (dsp, chain, engine, instrument, metering)")
+    parser.add_argument("--group", help="only this group (dsp, chain, graph, engine, instrument, metering)")
     parser.add_argument("--budgets", action="store_true", help="check the documented budgets")
     parser.add_argument("--top", type=int, default=0, help="print the N tightest cases instead")
     args = parser.parse_args(argv)

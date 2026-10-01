@@ -134,11 +134,14 @@ void GraphNode::applyGainSmoothing(int numFrames) noexcept {
                     data[i] *= current;
             }
         } else {
-            const float coefficient = smoothingCoefficient_;
-            for (int i = 0; i < frames; ++i) {
-                current += (target - current) * coefficient;
-                data[i] *= current;
-            }
+            // The ramp is the same first-order recursion the level meter uses: a
+            // per-sample loop-carried dependency that no compiler can vectorise.
+            // `applyOnePoleRamp` evaluates it four samples at a time from the
+            // closed form of the group, so the four multiplies are independent.
+            // Same ramp, same end point (the closed form is the recursion, not an
+            // approximation of it).
+            current = math::applyOnePoleRamp(data, frames, current, target,
+                                            1.0f - smoothingCoefficient_);
         }
         if (channel == 0)
             currentGainL_ = current;

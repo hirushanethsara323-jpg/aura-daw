@@ -33,7 +33,10 @@ honest answer to "where is it?".
    `research/LATENCY_COMPENSATION_RESEARCH.md`. Remaining follow-ups: manual latency
    override for plug-ins that misreport, and wiring VST3's `kLatencyChanged`
    notification to a plan rebuild (M6/M7).
-6. SIMD decision, made from profile data rather than taste.
+6. ~~SIMD decision, made from profile data rather than taste.~~ **done** — measured:
+   hand-written AVX2 is worth 1.5–2× on elementwise loops that are ~3 % of a session,
+   so it is deferred; the profile pointed at the per-sample recursions instead, which
+   are now evaluated in blocks (`research/SIMD_RESEARCH.md`, ADR-0016).
 
 ## Deliberate non-goals for v1
 

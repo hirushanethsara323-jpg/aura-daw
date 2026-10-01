@@ -13,6 +13,7 @@ add_executable(aura_bench
   Benchmarks.cpp
   DspBenchmarks.cpp
   EngineBenchmarks.cpp
+  GraphBenchmarks.cpp
 )
 
 target_include_directories(aura_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

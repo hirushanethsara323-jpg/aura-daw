@@ -31,6 +31,7 @@ costs us.
 | 15 | [ACCESSIBILITY_LOCALIZATION_RESEARCH.md](ACCESSIBILITY_LOCALIZATION_RESEARCH.md) | UI Automation, keyboard-first, i18n catalogues |
 | 16 | [PERFORMANCE_RESEARCH.md](PERFORMANCE_RESEARCH.md) | Latency budgets, CPU measurement, SIMD, denormals |
 | 17 | [LATENCY_COMPENSATION_RESEARCH.md](LATENCY_COMPENSATION_RESEARCH.md) | Delay compensation: per-edge alignment, read-ahead vs. delay, what cannot be fixed |
+| 18 | [SIMD_RESEARCH.md](SIMD_RESEARCH.md) | Applying SIMD to the mixing path: measured ceiling, what actually costs, block-state unrolling instead |
 
 ## Status vocabulary
 

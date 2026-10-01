@@ -15,7 +15,7 @@ cd build && ctest --output-on-failure          # everything
 python3 tools/rt_audit.py .                    # the static RT audit, by hand
 ```
 
-`ctest` runs **104 entries**: 102 Catch2 test cases plus two static-analysis tests
+`ctest` runs **111 entries**: 109 Catch2 test cases plus two static-analysis tests
 (`rt_audit` and `include_audit`). Current status: all passing.
 
 ## The five layers
@@ -28,6 +28,7 @@ Question answered: *does this component behave the way its header says?*
 |------|------|-----------|
 | Core | `tests/core/CoreTests.cpp` | `AuraResult` value/error paths, error-code catalogue, logging ring, JSON round trip, atomic file write, SPSC ring, two-thread producer/consumer, localisation fallback |
 | DSP | `tests/dsp/DspTests.cpp` | biquad vs. analytic magnitude, EQ band isolation, compressor knee, limiter ceiling, delay time, reverb finiteness/decay, distortion spectrum, oscillator frequency, envelope stages, level meter peak/RMS, loudness vs. BS.1770, smoothing ramps |
+| DSP | `tests/dsp/BlockStateTests.cpp` | block-state unrolling: the closed-form recursion vs. the per-sample one over odd block sizes and long runs, the ramp's monotonicity and landing behaviour, block-size independence of the meter reading |
 | Time | `tests/time/TimeTests.cpp` | 960 PPQN, tempo → sample math, tempo change mid-song, BBT round trip, time signatures, SMPTE including 29.97 drop-frame |
 | Graph | `tests/graph/GraphTests.cpp` | destination clearing, topological order, cycle reporting, fader ramping, insert chain + bypass, memory stream, disk stream, `readWithSilence` |
 | Graph | `tests/graph/DelayCompensationTests.cpp` | delay compensation measured by where impulses *land*: aligned vs. misaligned arrivals, send vs. direct out, longest-path arithmetic, bypass, long-run ring stability, insert preparation, and the same property end-to-end through `AudioEngine` |

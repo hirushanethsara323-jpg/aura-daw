@@ -242,6 +242,41 @@ live in the per-topic documents in this folder; this file is the index of record
   with unprepared state (silent delay lines, garbage filters). Fixed as part of this
   ADR, with a regression test.
 
+## ADR-0016 — The mixing path is optimised algorithmically, not with SIMD intrinsics
+
+* **Accepted and implemented** (M5, issue #6). Measured ceiling first: hand-written
+  AVX2 + FMA beats an *auto-vectorizable* SSE2 baseline by only 1.5–2× on gain and pan,
+  and by **1.0×** on the fan-in summing loop (it is load/store bound at 256-frame
+  blocks). The whole fan-in path is ~3 % of a 48-track session. Verdict: two code
+  paths plus a CPU-feature dispatch for well under 1 % end to end is not a trade this
+  project makes.
+* **What was adopted instead:** block-state unrolling of the two loops that are
+  actually expensive and that no compiler can vectorize, because they are first-order
+  recursions with a loop-carried dependency — the level meter's exponential RMS and a
+  node's gain ramp. A group of *k* steps has a closed form (the recurrence is linear
+  and time-invariant inside a block), which shortens the dependency chain from four
+  steps to one. Measured: meter −41 %, fader ramp −63 %, a 1-track session −6 %; the
+  same recurrence re-associated, so the audio is unchanged to 1e-5 relative
+  (0.0001 dB), pinned by `tests/dsp/BlockStateTests.cpp`.
+* **Rejected:** `-ffast-math` / `/fp:fast` (breaks reproducible DSP, which tests and
+  byte-identical renders depend on); `-march=native` (binaries illegal on older CPUs,
+  and untestable in CI); AVX-512 (absent from the reference "modest PC" profile);
+  intrinsics behind a runtime `cpuid` dispatch (the maintenance cost lands on every
+  future edit of the mixer for a gain the profile does not show).
+* **Why the "measure the ceiling" step mattered:** the first probe reported a 7× win
+  for AVX2 because its *scalar* baseline was written without `__restrict` and therefore
+  could not be vectorized by the compiler at all. A benchmark that flatters its
+  favourite answer is worse than none — the same lesson as the denormal trap in the
+  fader case (ADR-0015's benchmark note), where a case that drained its material into
+  subnormals reported 72 ns/frame for a 2.8 ns/frame loop.
+* **Consequences:** the mixer's elementwise loops stay compiler-vectorizable and
+  alias-friendly (no hand-written kernels to keep in step with a CPU feature table);
+  the recursion helpers in `core/Math.hpp` are the shared, tested home for this pattern
+  and future smoothers should use them; the decision has a written revisit condition
+  (elementwise loop > 10 % of the block budget on the reference profile, then ≥2×
+  measured in isolation), and `std::simd` from C++26 is named as the development that
+  would remove the cost side of the trade.
+
 ---
 
 ## Open decisions
@@ -251,5 +286,5 @@ live in the per-topic documents in this folder; this file is the index of record
 | O-1 | Out-of-process plug-in sandbox: child process vs. JUCE-style plugin host process | M7 | measured crash rate + IPC latency budget |
 | O-2 | VST3 SDK: statically linked and vendored into the build, or loaded through an optional adapter module | M6 | whether the MIT text can be redistributed in binary releases as we intend |
 | O-3 | MSIX in addition to an Inno Setup EXE | M11 | whether the Store/sideload story is worth the signing cost |
-| O-4 | SIMD path (SSE2/AVX2) for the graph and EQ, or leave it to the compiler | M5 | benchmark results in `bench/` on a modest machine |
+| O-4 | ~~SIMD path (SSE2/AVX2) for the graph and EQ, or leave it to the compiler~~ — **settled by ADR-0016** (leave the elementwise loops to the compiler; unroll the recursions instead) | M5 | done |
 | O-5 | Whether to ship an internal sample-rate converter | after M5 | user reports; until then a mismatch is an explicit error |

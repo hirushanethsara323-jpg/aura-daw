@@ -132,7 +132,9 @@ makes the budget honest rather than optimistic.
    fault; worst-case time is what matters, not the average. Enforced statically and
    dynamically.
 3. **Denormal flushing** in every recursive structure — an unfushed reverb tail can
-   cost 10–100× a normal sample.
+   cost 10–100× a normal sample. The same trap bit the gain ramp's closed form, which
+   is why it snaps its residual to the target at 8 ULP instead of creeping through the
+   subnormal range (SIMD_RESEARCH.md, Step 5).
 4. **Planar float buffers, block processing, in-place where possible**; no
    per-sample virtual dispatch beyond the processor boundary.
 5. **One conversion per boundary** — float internally, integer at the file edge; no

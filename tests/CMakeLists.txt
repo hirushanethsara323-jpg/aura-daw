@@ -73,6 +73,7 @@ add_executable(aura_tests
   core/CoreTests.cpp
   time/TimeTests.cpp
   dsp/DspTests.cpp
+  dsp/BlockStateTests.cpp
   graph/GraphTests.cpp
   graph/DelayCompensationTests.cpp
   audio/AudioTests.cpp

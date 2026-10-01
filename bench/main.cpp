@@ -25,6 +25,7 @@
 namespace aura::bench {
 void registerDspBenchmarks();
 void registerEngineBenchmarks(const std::vector<int>& blockSizes);
+void registerGraphBenchmarks(const std::vector<int>& blockSizes);
 double dspBenchmarkChecksum();
 double engineBenchmarkChecksum();
 } // namespace aura::bench
@@ -108,6 +109,7 @@ int main(int argc, char** argv) {
 
     const std::vector<int> blockSizes{64, 128, 256, 512, 1024, 2048};
     registerDspBenchmarks();
+    registerGraphBenchmarks(blockSizes);
     registerEngineBenchmarks(blockSizes);
 
     if (listOnly) {
