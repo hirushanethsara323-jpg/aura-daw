@@ -72,6 +72,47 @@ TEST_CASE("A destination node is cleared every block (no accumulation)", "[graph
     }
 }
 
+TEST_CASE("A node keeps every destination it is connected to (fan-out)", "[graph][regression]") {
+    // REGRESSION: connect() used to *replace* the source's destination list, so the
+    // second connection erased the first. Fan-out is the normal case in a DAW - a
+    // track's own output plus one or more sends - so in the engine a send silently
+    // deleted the track's main output and the dry signal vanished from the mix.
+    graph::GraphBuilder builder;
+    const auto masterId = builder.createNode(graph::NodeKind::Master, "Master");
+    const auto busId = builder.createNode(graph::NodeKind::Bus, "Reverb");
+    const auto trackId = builder.createNode(graph::NodeKind::Track, "Vocal");
+    builder.connect(trackId, masterId); // the direct out
+    builder.connect(trackId, busId);    // the send
+    builder.connect(busId, masterId);
+    builder.setMasterNode(masterId);
+
+    auto plan = builder.build();
+    REQUIRE(plan != nullptr);
+
+    const auto* track = plan->find(trackId);
+    REQUIRE(track != nullptr);
+    REQUIRE(track->destinations().size() == 2);
+
+    for (const auto& node : plan->nodes())
+        node->prepare(48000.0, 64, 2);
+
+    auto* source = plan->find(trackId);
+    auto* master = plan->find(masterId);
+    REQUIRE(source != nullptr);
+    REQUIRE(master != nullptr);
+
+    dsp::ProcessContext context;
+    context.sampleRate = 48000.0;
+    fillConstant(*source, 64, 0.5f);
+    plan->process(64, context, false);
+
+    // Both routes carry the signal: 0.5 direct + 0.5 through the bus = 1.0. With the
+    // direct connection lost, this read 0.5 (and in the engine, with a muted return,
+    // it read 0.0).
+    REQUIRE(readNode(*master, 0, 63) == Approx(1.0f).margin(1e-6f));
+    REQUIRE(readNode(*master, 1, 63) == Approx(1.0f).margin(1e-6f));
+}
+
 TEST_CASE("Topological order puts sources before destinations", "[graph]") {
     graph::GraphBuilder builder;
     const auto master = builder.createNode(graph::NodeKind::Master, "Master");

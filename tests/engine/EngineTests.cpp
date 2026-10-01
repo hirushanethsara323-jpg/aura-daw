@@ -90,6 +90,55 @@ struct Fixture {
 
 } // namespace
 
+TEST_CASE("A track with a send still plays through its own output", "[engine][regression]") {
+    // REGRESSION: the graph builder replaced a node's destination list on every
+    // connect(), so attaching a send removed the track's direct out - the dry
+    // signal disappeared from the mix. The return here is muted, which makes the
+    // failure unambiguous: the track's own path is the only one that can reach the
+    // master, so a silent master means the send ate it.
+    Fixture fixture;
+    audio::Track* track = fixture.project->mixer().findTrack(fixture.trackId);
+    REQUIRE(track != nullptr);
+
+    const audio::TrackId busId = fixture.project->mixer().createTrack(audio::TrackKind::Bus, "Return");
+    audio::Track* bus = fixture.project->mixer().findTrack(busId);
+    REQUIRE(bus != nullptr);
+    bus->setMuted(true);
+
+    audio::Send send;
+    send.destination = busId;
+    send.level = 1.0f;
+    send.enabled = true;
+    track->addSend(send);
+
+    TestDevice device;
+    engine::AudioEngine engine;
+    engine::EngineSettings settings;
+    settings.sampleRate = 48000.0;
+    settings.bufferSize = 256;
+    engine.setProject(fixture.project.get());
+    REQUIRE(static_cast<bool>(engine.initialise(&device, settings)));
+    REQUIRE(static_cast<bool>(engine.rebuildGraph()));
+
+    const auto* trackNode = engine.currentPlan()->find(track->graphNodeId());
+    REQUIRE(trackNode != nullptr);
+    REQUIRE(trackNode->destinations().size() == 2); // the direct out and the send
+
+    engine.transport().play();
+    // The muted return fades over ~24 ms, so the first blocks still carry a little
+    // of the ramp; the measurement starts once it has settled. With the direct
+    // output lost, everything after the ramp is silence.
+    float settling = 0.0f;
+    device.run(16, &settling);
+    float peak = 0.0f;
+    device.run(16, &peak);
+    INFO("master peak " << peak);
+    // The clip is a 0.5 sine at a unity fader, so the direct path alone gives 0.5.
+    REQUIRE(peak == Approx(0.5f).margin(0.02f));
+    // The clip is a 0.5 sine at unity fader, so the direct path alone gives 0.5.
+    REQUIRE(peak == Approx(0.5f).margin(0.02f));
+}
+
 TEST_CASE("The engine renders project audio through the graph", "[engine]") {
     Fixture fixture;
     TestDevice device;

@@ -2,6 +2,7 @@
 // AURA DAW - src/graph/GraphNode.cpp
 // SPDX-License-Identifier: GPL-3.0-or-later
 // ============================================================================
+#include <algorithm>
 #include <cstring>
 
 #include "aura/graph/AudioGraph.hpp"
@@ -311,9 +312,19 @@ GraphNode* GraphBuilder::find(NodeId id) const noexcept {
 void GraphBuilder::connect(NodeId source, NodeId destination) {
     if (source == kInvalidNodeId || destination == kInvalidNodeId || source == destination)
         return;
+
+    // One edge per (source, destination) pair. A repeated connect() must not add a
+    // second edge: the audio would be summed twice and the in-degree that drives
+    // Kahn's ordering (and the incoming-connection count that drives clearing)
+    // would be inflated.
+    const auto duplicate = std::find(connections_.begin(), connections_.end(),
+                                     std::pair<NodeId, NodeId>{source, destination});
+    if (duplicate != connections_.end())
+        return;
+
     connections_.emplace_back(source, destination);
     if (GraphNode* node = find(source))
-        node->setDestinations({destination});
+        node->addDestination(destination);
 }
 
 std::shared_ptr<GraphPlan> GraphBuilder::build(std::string* outError) const {

@@ -212,6 +212,22 @@ public:
     [[nodiscard]] const InsertChain& inserts() const noexcept { return inserts_; }
 
     /// Routing: where this node's output goes (node ids, order preserved).
+    ///
+    /// Appending, not replacing. Fan-out is the normal case in a DAW - a track's
+    /// own output plus any number of sends - and connect() used to overwrite the
+    /// list, so the second connection erased the first. In the engine that meant
+    /// attaching a send silently deleted the track's direct out: the dry signal
+    /// left the mix and, with a muted return, the track went silent. A duplicate
+    /// edge is ignored, because summing the same source twice would double its
+    /// level and inflate the fan-in count.
+    void addDestination(NodeId destination) {
+        if (destination == kInvalidNodeId || destination == id_)
+            return;
+        if (std::find(destinations_.begin(), destinations_.end(), destination) != destinations_.end())
+            return;
+        destinations_.push_back(destination);
+    }
+
     void setDestinations(std::vector<NodeId> destinations) {
         destinations_ = std::move(destinations);
     }
