@@ -145,22 +145,24 @@ TEST_CASE("An edge gain scales the connection it belongs to", "[graph][sends]") 
     REQUIRE(readNode(*master, 0, 63) == Approx(0.625f).margin(1e-6f));
 
     SECTION("a zero-level send contributes nothing at all") {
-        graph::GraphBuilder muted;
-        const auto master = muted.createNode(graph::NodeKind::Master, "Master");
-        const auto aux = muted.createNode(graph::NodeKind::Bus, "Aux");
-        const auto track = muted.createNode(graph::NodeKind::Track, "Vocal");
-        muted.connect(track, master, 1.0f);
-        muted.connect(track, aux, 0.0f);
-        muted.connect(aux, master);
-        muted.setMasterNode(master);
+        // Distinct names from the enclosing scope: the CI build uses -Werror=shadow,
+        // and a shadowed `master` here is a warning, not a style preference.
+        graph::GraphBuilder mutedBuilder;
+        const auto mutedMaster = mutedBuilder.createNode(graph::NodeKind::Master, "Master");
+        const auto mutedAux = mutedBuilder.createNode(graph::NodeKind::Bus, "Aux");
+        const auto mutedTrack = mutedBuilder.createNode(graph::NodeKind::Track, "Vocal");
+        mutedBuilder.connect(mutedTrack, mutedMaster, 1.0f);
+        mutedBuilder.connect(mutedTrack, mutedAux, 0.0f);
+        mutedBuilder.connect(mutedAux, mutedMaster);
+        mutedBuilder.setMasterNode(mutedMaster);
 
-        auto mutedPlan = muted.build();
+        auto mutedPlan = mutedBuilder.build();
         REQUIRE(mutedPlan != nullptr);
         for (const auto& node : mutedPlan->nodes())
             node->prepare(48000.0, 64, 2);
-        fillConstant(*mutedPlan->find(track), 64, 0.5f);
+        fillConstant(*mutedPlan->find(mutedTrack), 64, 0.5f);
         mutedPlan->process(64, context, false);
-        REQUIRE(readNode(*mutedPlan->find(master), 0, 63) == Approx(0.5f).margin(1e-6f));
+        REQUIRE(readNode(*mutedPlan->find(mutedMaster), 0, 63) == Approx(0.5f).margin(1e-6f));
     }
 }
 
