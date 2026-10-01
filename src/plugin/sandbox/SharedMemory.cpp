@@ -5,7 +5,8 @@
 #include "SharedMemory.hpp"
 
 #include <atomic>
-#include <cstdio>
+#include <cstdint> // std::uint64_t is used below and is pulled in transitively by some
+#include <cstdio>  // libstdc++ versions - which is exactly why it is spelled out here.
 #include <cstring>
 #include <string>
 

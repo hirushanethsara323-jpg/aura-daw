@@ -147,6 +147,16 @@ struct Mailbox {
     std::atomic<std::uint64_t> heartbeatMs{0}; ///< the helper's clock, for the watchdog
 };
 
+#if defined(_MSC_VER)
+// C4324 ("structure was padded due to alignment specifier") is the design here, the
+// same way it is in core/SpscQueue.hpp: head, tail and the payload each get their own
+// cache line so the two processes never false-share, and the arena's slots are
+// 64-byte aligned so two mappings of them never fight over a line. The project builds
+// /W4 /WX, so the warning is silenced where it is understood rather than globally.
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
+
 /// Fixed-capacity SPSC ring over shared memory. Wait-free on both sides, at most one
 /// record of work per call, no allocation ever - the same contract as
 /// core/SpscQueue.hpp, written here so the helper (which includes no AURA headers)
@@ -262,9 +272,22 @@ struct alignas(kSlotAlignment) SandboxArena {
     }
 };
 
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
               "the arena's sequence numbers must be lock-free: both sides are real-time");
-static_assert(std::is_trivially_copyable_v<SharedRing<EventRecord, kMaxEvents>>);
+
+// What the arena needs of its members is *not* "trivially copyable" - the rings hold
+// atomics, and whether those count as trivially copyable is a standard-library detail
+// that differs between libstdc++ and MSVC's STL. What it needs is that no member has a
+// destructor to run: this memory is mapped into two processes, and neither of them
+// owns an object in it. The audio slot, which really is copied as a flat block, gets
+// the stronger assertion it can satisfy.
+static_assert(std::is_trivially_destructible_v<SharedRing<EventRecord, kMaxEvents>>);
+static_assert(std::is_trivially_destructible_v<SharedRing<ParamRecord, kMaxParamChanges>>);
+static_assert(std::is_trivially_copyable_v<AudioSlot>);
 
 /// Byte size of the arena: the host allocates this, the helper maps exactly this, so
 /// it is one function and not two numbers that can drift.
