@@ -307,7 +307,19 @@ endif()
 # crash isolation the scanner has.
 # ---------------------------------------------------------------------------
 add_executable(aura_scan_host tools/scan_host/ScanHost.cpp)
+# One predictable location for every generator and every configuration. A
+# multi-config generator (Visual Studio) appends the configuration name to
+# RUNTIME_OUTPUT_DIRECTORY unless the per-configuration properties are set too,
+# which would leave the helper in tools/<Config>/ - while the host looks for it
+# next to the executable, in ../tools and in ../../tools. The symptom was a
+# Windows-only failure of "the scanner helper is built next to the tests" with
+# every Linux job green, i.e. exactly the platform gap the Windows rows exist for.
 set_target_properties(aura_scan_host PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+foreach(_aura_config IN LISTS CMAKE_CONFIGURATION_TYPES)
+  string(TOUPPER "${_aura_config}" _aura_config_upper)
+  set_target_properties(aura_scan_host PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_${_aura_config_upper} "${CMAKE_BINARY_DIR}/tools")
+endforeach()
 target_link_libraries(aura_scan_host PRIVATE Aura::Engine Aura::Core)
 if(AURA_ENABLE_VST3)
   target_include_directories(aura_scan_host PRIVATE src/plugin/vst3)
