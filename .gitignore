@@ -29,3 +29,7 @@ Desktop.ini
 # Python bytecode (tools/ are run, not built)
 __pycache__/
 *.pyc
+
+# Benchmark/soak output (JSON with a sample per interval): an artifact of a run, not
+# source. The numbers that matter are copied into docs/PERFORMANCE.md.
+bench/results/

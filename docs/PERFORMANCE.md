@@ -184,9 +184,12 @@ cmake --build build-bench -j 2 --target aura_soak
     --rebuild-every 120 --interval 60 --json bench/results/soak-8h.json
 ```
 
-The harness drives a device that never sleeps, so it processes on the order of
-**10⁴× real time** here: a one-minute run is several days of audio through the
-graph. That is deliberate — the paths that are allowed to allocate (graph rebuild,
+The harness drives a device that never sleeps, so it processes roughly **400× real
+time** at 16 tracks: a one-minute run puts about six hours of audio through the
+graph, and the twenty-minute run below put 5.9 days through it. (The factor scales
+with track count and whether the insert chains are loaded, which is why the tables
+below report wall time and audio time side by side rather than quoting a single
+number.) That is deliberate — the paths that are allowed to allocate (graph rebuild,
 plan publication, media open/close, take write) get exercised hundreds of thousands
 of times instead of a handful — with one consequence worth knowing about: a take
 bounded by wall-clock time would be gigabytes long, so takes are bounded by
