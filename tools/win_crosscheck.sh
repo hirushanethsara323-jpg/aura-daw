@@ -18,6 +18,9 @@
 #   * `EnumAudioEndpoints(eRender | eCapture, ...)` passed an int where EDataFlow
 #     was expected - and, since eRender is 0 and eCapture is 1, would have
 #     enumerated capture endpoints only.
+#   * tests/plugin/SandboxEchoHelper.cpp called ControlChannel::adoptPair, a name that
+#     had been renamed - the file is tests/, so the src/ scan never looked at it, and
+#     the Linux build never compiles the `#if defined(_WIN32)` branch that used it.
 #
 # MinGW is *not* a supported AURA build target (MSVC is). This is a
 # syntax-and-types check for development and CI convenience, not a link test.
@@ -87,7 +90,7 @@ trap '[ -n "$HEADER_DIR" ] && rm -rf "$HEADER_DIR"; rm -f "$LOG" "$FAILED_LOG"' 
 # flags, so a cross-checked file is held to the same standard as a native build.
 check_file() {
     local file="$1" label="$2"
-    if ! "$CXX" -std=c++20 -I "$ROOT/include" \
+    if ! "$CXX" -std=c++20 -I "$ROOT/include" -I "$ROOT/src/plugin/sandbox" \
             -D_WIN32 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -DUNICODE -D_UNICODE \
             -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x0A00 \
             -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion \
@@ -110,6 +113,18 @@ echo "win_crosscheck: compiler $($CXX --version | head -n1)"
 # for real, which is a better check than a syntax pass anyway.
 mapfile -t SOURCES < <(cd "$ROOT" && find src app bench -name '*.cpp' 2>/dev/null \
     | grep -v '^src/plugin/vst3/' | sort)
+
+# Test helpers that are Windows-only code in their own right. They are not under
+# src/, and they must not need Catch2 (this script has no test framework include
+# path), but a `#if defined(_WIN32)` branch inside one of them is compiled by the
+# Windows CI rows and by nothing else - which is exactly the blind spot that lost a
+# Windows round to `adoptPair` being renamed without the test helper being updated.
+EXTRA_SOURCES=(tests/plugin/SandboxEchoHelper.cpp)
+for extra in "${EXTRA_SOURCES[@]}"; do
+    if [ -f "$ROOT/$extra" ]; then
+        SOURCES+=("$extra")
+    fi
+done
 if [ "${#SOURCES[@]}" -eq 0 ]; then
     echo "win_crosscheck: no sources found - is this an AURA checkout?" >&2
     exit 2

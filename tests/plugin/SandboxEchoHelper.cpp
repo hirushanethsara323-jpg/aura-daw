@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
     // own handle value. On POSIX one descriptor is both.
     const std::uintptr_t writeHandle = controlArgument(argc, argv, "--control-write", false);
     if (writeHandle != 0)
-        channel = ControlChannel::adoptPair(readHandle, writeHandle, error);
+        channel = ControlChannel::adoptHandles(readHandle, writeHandle, error);
 #endif
     if (!channel.valid())
         return 2;
