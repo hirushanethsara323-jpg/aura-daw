@@ -217,13 +217,20 @@ turn a glitch into a stutter. The chain skips bypassed and failed slots, and
 * **No note expressions, no CC mapping, no note output events** (M7).
 * **CLAP is not implemented.** The option is reserved and the enum exists so the
   database can list CLAP bundles with the reason; there is no adapter behind it.
-* **The test fixture's bundle layout is implemented for Linux only.** Configuring
-  `AURA_ENABLE_VST3=ON` elsewhere warns; the adapter itself is platform-neutral, and
-  the Windows/macOS bundles only need the platform's own directory layout and entry
-  points in `tests/CMakeLists.txt`.
+* **The test fixture's bundle layout is implemented for Linux and Windows**
+  (`Contents/<arch>-linux/<name>.so`, `Contents/x86_64-win/<name>.vst3`); macOS
+  warns and skips, since nothing builds the fixture there. The adapter itself is
+  platform-neutral.
 * **Windows child processes have no job object yet**: a hung scanner is killed by
   handle, but a plug-in that spawns its own children is not cleaned up. POSIX gets a
   process group; the Windows path documents the gap in `src/plugin/ChildProcess.cpp`.
+* **A crash on Windows is not always quick.** A crashing process can sit in Windows
+  Error Reporting for seconds before it finally dies, so a bundle that crashes during
+  a scan may be reported as a *timeout* rather than a crash. Both outcomes quarantine
+  the bundle with a reason and neither touches the session, which is why the timeout
+  is the defence that matters - and why the scanner's own crash test hook uses a
+  fail-fast exception instead of `abort()`: a test that waits for the crash reporter
+  is a test of the crash reporter.
 
 ## Troubleshooting
 
@@ -243,6 +250,11 @@ turn a glitch into a stutter. The chain skips bypassed and failed slots, and
 cd build-vst3 && ctest -R "vst3|scanner|plug" --output-on-failure
 ./tests/aura_tests "[vst3]" -s        # every assertion, with expansions
 ```
+
+CI runs it in two configurations: `Linux VST 3 hosting` (the row that fetches the
+SDK, builds and runs everything, then scans the bundle with the helper and reads the
+JSON back) and the Windows `Debug-VST3` matrix row, which is the same code under MSVC
+against a bundle in the Windows layout.
 
 The subject is `tests/plugin/vst3/AuraTestPlugin.cpp`, an original plug-in built as a
 proper `.vst3` bundle (not an SDK sample: samples cannot even be built without

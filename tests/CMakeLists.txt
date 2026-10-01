@@ -116,16 +116,37 @@ if(AURA_ENABLE_VST3)
   endif()
   target_include_directories(aura_test_vst3_plugin SYSTEM PRIVATE ${vst3sdk_SOURCE_DIR})
   target_link_libraries(aura_test_vst3_plugin PRIVATE sdk sdk_common)
-  set_target_properties(aura_test_vst3_plugin PROPERTIES
-    PREFIX "" SUFFIX ".so" OUTPUT_NAME "AuraTestPlugin")
 
-  if(UNIX AND NOT APPLE)
-    # Linux: a VST 3 bundle is <name>.vst3/Contents/<machine>-linux/<name>.so and
-    # the SDK's loader refuses anything else, so the build assembles the layout
-    # instead of leaving a bare .so that cannot be loaded by the format it claims.
+  # Both layouts the format defines: a bundle is <name>.vst3/Contents/<platform>/
+  # <name>.<ext>, the loader refuses anything else, and the inner file must be named
+  # after the bundle folder. Leaving a bare library where the format wants a bundle
+  # produces a "plug-in" that cannot be loaded by the format it claims to be.
+  if(WIN32)
+    # Windows: the binary itself carries the .vst3 extension, and the platform
+    # directory is x86_64-win (x86-win on a 32-bit build).
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+      set(AURA_VST3_BUNDLE_LIBDIR "x86_64-win")
+    else()
+      set(AURA_VST3_BUNDLE_LIBDIR "x86-win")
+    endif()
+    set(AURA_VST3_BUNDLE_LIBNAME "AuraTestPlugin.vst3")
+    set_target_properties(aura_test_vst3_plugin PROPERTIES
+      PREFIX "" SUFFIX ".vst3" OUTPUT_NAME "AuraTestPlugin")
+  elseif(UNIX AND NOT APPLE)
     set(AURA_VST3_BUNDLE_LIBDIR "${CMAKE_SYSTEM_PROCESSOR}-linux")
+    set(AURA_VST3_BUNDLE_LIBNAME "AuraTestPlugin.so")
+    set_target_properties(aura_test_vst3_plugin PROPERTIES
+      PREFIX "" SUFFIX ".so" OUTPUT_NAME "AuraTestPlugin")
+  else()
+    message(WARNING
+      "AURA_ENABLE_VST3=ON but the test bundle layout is only implemented for "
+      "Linux and Windows; the VST 3 tests will not be able to load the fixture on "
+      "this platform.")
+  endif()
+
+  if(DEFINED AURA_VST3_BUNDLE_LIBDIR)
     set(AURA_VST3_BUNDLE_FILE
-        "${CMAKE_CURRENT_BINARY_DIR}/vst3/AuraTestPlugin.vst3/Contents/${AURA_VST3_BUNDLE_LIBDIR}/AuraTestPlugin.so")
+        "${CMAKE_CURRENT_BINARY_DIR}/vst3/AuraTestPlugin.vst3/Contents/${AURA_VST3_BUNDLE_LIBDIR}/${AURA_VST3_BUNDLE_LIBNAME}")
     add_custom_command(TARGET aura_test_vst3_plugin POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E make_directory
               "${CMAKE_CURRENT_BINARY_DIR}/vst3/AuraTestPlugin.vst3/Contents/${AURA_VST3_BUNDLE_LIBDIR}"
@@ -135,10 +156,6 @@ if(AURA_ENABLE_VST3)
     # The tests load a real bundle from disk; building the tests must not race it.
     add_dependencies(aura_tests aura_test_vst3_plugin)
     add_dependencies(aura_scan_host aura_test_vst3_plugin)
-  else()
-    message(WARNING
-      "AURA_ENABLE_VST3=ON but the test bundle layout is only implemented for "
-      "Linux; the VST 3 tests will not be able to load the fixture on this platform.")
   endif()
 endif()
 

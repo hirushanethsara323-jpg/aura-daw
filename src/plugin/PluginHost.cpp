@@ -161,10 +161,12 @@ ScanOutcome scanVst3Bundle(const std::string& path, bool preferChildProcess,
         (void)filesystem::removeFile(output);
 
         if (result.timedOut) {
-            outcome.failureReason = "the scanner did not finish within " +
-                                    strings::fromDouble(request.timeoutSeconds, 0) +
-                                    "s (the plug-in may be showing a dialog or waiting for a "
-                                    "licence); the bundle was quarantined";
+            outcome.failureReason =
+                "the scanner did not finish within " +
+                strings::fromDouble(request.timeoutSeconds, 0) +
+                "s (the plug-in may be showing a dialog or waiting for a licence, or - on "
+                "Windows - it may have crashed and be waiting for the system's crash "
+                "reporting); the bundle was quarantined";
             return outcome;
         }
         if (result.crashed()) {

@@ -14,7 +14,11 @@
 // Test hooks (used by tests/plugin/ChildProcessTests.cpp to prove the supervisor
 // really does kill a runaway child and really does report a crash):
 //   AURA_SCAN_BEHAVIOUR=hang    block forever instead of scanning
-//   AURA_SCAN_BEHAVIOUR=crash   abort() instead of scanning
+//   AURA_SCAN_BEHAVIOUR=crash   die as a crashing process does, immediately:
+//                               a fail-fast exception on Windows (abort() there
+//                               can sit in the Debug CRT's dialog or in Windows
+//                               Error Reporting, which models a real crash's *wait*
+//                               rather than the crash), abort() elsewhere
 // They are environment variables rather than flags so a real plug-in cannot ask
 // its way into them: only whoever launched the scanner can set them.
 //
@@ -33,6 +37,10 @@
 
 #include "aura/core/Version.hpp"
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 #if AURA_ENABLE_VST3
 #include "Vst3Host.hpp"
 #endif
@@ -43,6 +51,25 @@ std::string behaviourOverride() {
     if (const char* value = std::getenv("AURA_SCAN_BEHAVIOUR"))
         return value;
     return {};
+}
+
+/// Ends this process the way a crashing plug-in ends the scanner: no unwinding, no
+/// handlers, no shell, and nothing the parent could confuse with an orderly exit.
+///
+/// Windows needs the explicit call. `std::abort()` there raises the CRT's abort
+/// behaviour, which in a Debug build prints a dialog and in any build can hand the
+/// process to Windows Error Reporting - a real crash really does wait there for
+/// seconds, which the parent covers with its timeout, but a *test hook* that waits
+/// for the crash reporter tests the crash reporter. Fail-fast cannot be caught and
+/// does not wait.
+[[noreturn]] void dieAsACrashWould() {
+#if defined(_WIN32)
+    RaiseFailFastException(nullptr, nullptr, 0);
+    TerminateProcess(GetCurrentProcess(), 0xC0000005u); // only if fail-fast returned
+    for (;;) { }                                        // unreachable
+#else
+    std::abort();
+#endif
 }
 
 int fail(int code, const std::string& message) {
@@ -78,9 +105,8 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::hours(1));
         return 0;
     }
-    if (behaviour == "crash") {
-        std::abort();
-    }
+    if (behaviour == "crash")
+        dieAsACrashWould();
 
 #if AURA_ENABLE_VST3
     auto scanned = aura::plugin::vst3::scanBundle(bundle);
