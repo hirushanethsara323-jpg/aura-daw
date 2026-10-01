@@ -178,8 +178,12 @@ Status AudioEngine::rebuildGraph() {
             if (!send.enabled)
                 continue;
             const auto sendTarget = nodeIds.find(send.destination);
-            if (sendTarget != nodeIds.end())
-                builder.connect(source, sendTarget->second);
+            if (sendTarget != nodeIds.end()) {
+                // The send's level is the edge gain: a send is a connection with a
+                // gain, not a copy of the whole channel. It used to be ignored, so
+                // every send played at unity whatever the user dialled in.
+                builder.connect(source, sendTarget->second, send.level);
+            }
         }
     }
 

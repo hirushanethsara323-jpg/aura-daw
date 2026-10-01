@@ -73,6 +73,9 @@ Each of these exists because it actually failed:
 | "Snapping to markers picks the nearest marker" | marker ticks were converted at 60 BPM regardless of tempo |
 | "Zero-crossing snapping finds a click-free edit point" | a sample at ~1e-16 read as "not a crossing", so the search walked past the point |
 | "Delay produces the requested delay time" | smoothers ramped in from zero and swallowed the first echoes |
+| "A node keeps every destination it is connected to (fan-out)" | `GraphBuilder::connect()` *replaced* a node's destination list, so attaching a send deleted the track's own output: the dry signal left the mix (measured: master peak 0.0001 where 0.5 was expected) |
+| "A track with a send still plays through its own output" | the same bug seen from the mix: the track went silent once a send was dialled in |
+| "A send plays at the level it is set to" | `Send::level` was stored, documented and never applied — every send played at unity |
 | Real-time-safety audit | `std::stable_sort` (allocates) on the MIDI path, and a dead `std::vector` in the stream read path |
 
 ### 4. Audio-quality tests

@@ -113,6 +113,57 @@ TEST_CASE("A node keeps every destination it is connected to (fan-out)", "[graph
     REQUIRE(readNode(*master, 1, 63) == Approx(1.0f).margin(1e-6f));
 }
 
+TEST_CASE("An edge gain scales the connection it belongs to", "[graph][sends]") {
+    // A send is a connection with a level, so the gain lives on the edge: the same
+    // source feeds the master at unity and a bus at -6 dB, and only the bus's copy
+    // is attenuated.
+    graph::GraphBuilder builder;
+    const auto masterId = builder.createNode(graph::NodeKind::Master, "Master");
+    const auto auxId = builder.createNode(graph::NodeKind::Bus, "Aux");
+    const auto trackId = builder.createNode(graph::NodeKind::Track, "Vocal");
+    builder.connect(trackId, masterId, 1.0f);   // the dry route
+    builder.connect(trackId, auxId, 0.25f);     // the send, at -12 dB
+    builder.connect(auxId, masterId);
+    builder.setMasterNode(masterId);
+
+    auto plan = builder.build();
+    REQUIRE(plan != nullptr);
+    for (const auto& node : plan->nodes())
+        node->prepare(48000.0, 64, 2);
+
+    auto* source = plan->find(trackId);
+    auto* master = plan->find(masterId);
+    REQUIRE(source != nullptr);
+    REQUIRE(master != nullptr);
+
+    dsp::ProcessContext context;
+    context.sampleRate = 48000.0;
+    fillConstant(*source, 64, 0.5f);
+    plan->process(64, context, false);
+
+    // 0.5 dry + 0.5 * 0.25 through the aux = 0.625. Ignoring the gain gave 1.0.
+    REQUIRE(readNode(*master, 0, 63) == Approx(0.625f).margin(1e-6f));
+
+    SECTION("a zero-level send contributes nothing at all") {
+        graph::GraphBuilder muted;
+        const auto master = muted.createNode(graph::NodeKind::Master, "Master");
+        const auto aux = muted.createNode(graph::NodeKind::Bus, "Aux");
+        const auto track = muted.createNode(graph::NodeKind::Track, "Vocal");
+        muted.connect(track, master, 1.0f);
+        muted.connect(track, aux, 0.0f);
+        muted.connect(aux, master);
+        muted.setMasterNode(master);
+
+        auto mutedPlan = muted.build();
+        REQUIRE(mutedPlan != nullptr);
+        for (const auto& node : mutedPlan->nodes())
+            node->prepare(48000.0, 64, 2);
+        fillConstant(*mutedPlan->find(track), 64, 0.5f);
+        mutedPlan->process(64, context, false);
+        REQUIRE(readNode(*mutedPlan->find(master), 0, 63) == Approx(0.5f).margin(1e-6f));
+    }
+}
+
 TEST_CASE("Topological order puts sources before destinations", "[graph]") {
     graph::GraphBuilder builder;
     const auto master = builder.createNode(graph::NodeKind::Master, "Master");

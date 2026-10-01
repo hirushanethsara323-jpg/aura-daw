@@ -100,10 +100,21 @@ that is wrong is a bug.
 
 ## Sends, buses and solo
 
-Tracks route to a destination (master by default, or a bus/aux return). Sends write
-into a destination node's input with a level. Solo is resolved once per block
-(`Mixer::resolveSoloState`) and applied by the plan, so a soloed bus keeps its
-sources audible and an unsoloed track is muted without the graph being rebuilt.
+Tracks route to a destination (master by default, or a bus/aux return). A send is a
+*connection with a level*, not a second copy of the channel: the level is carried on
+the graph edge (`InputEdge::gain`) and applied while summing, so one source can feed
+the master at unity and a reverb return at -12 dB without an extra node, buffer or
+latency-accounting participant. A zero-level send is skipped entirely — it carries
+nothing and must not touch a delay ring.
+
+Honest gap: every send currently taps the signal **post-fader**, because the tap point
+is the node's output. `Send::preFader` is stored and not yet honoured; a pre-fader tap
+needs the node to keep the signal before its fader, which is a bigger change than a
+gain on an edge.
+
+Solo is resolved once per block (`Mixer::resolveSoloState`) and applied by the plan, so
+a soloed bus keeps its sources audible and an unsoloed track is muted without the graph
+being rebuilt.
 
 ## Error handling
 

@@ -52,14 +52,28 @@ public:
         return buffer_.size() * sizeof(float);
     }
 
-    /// Adds `input` into `output`, delayed by `delaySamples`.
-    /// `delaySamples <= 0` degenerates to a plain sum (no ring traffic).
-    void sumDelayed(const float* input, float* output, int frames, int delaySamples) noexcept {
+    /// Adds `input * gain` into `output`, delayed by `delaySamples`.
+    /// `delaySamples <= 0` degenerates to a plain scaled sum (no ring traffic);
+    /// `gain == 1` is the plain sum the compensation path uses.
+    ///
+    /// The gain is here rather than in a separate node because a send is a
+    /// *connection* property: the same source feeds several destinations at
+    /// different levels, and giving each send its own gain node would add a node,
+    /// a buffer and a latency-accounting participant per send.
+    void sumDelayed(const float* input, float* output, int frames, int delaySamples,
+                    float gain = 1.0f) noexcept {
         if (frames <= 0 || input == nullptr || output == nullptr)
             return;
+        if (gain == 0.0f)
+            return; // a silent send costs nothing and must not even touch the ring
         if (delaySamples <= 0) {
-            for (int i = 0; i < frames; ++i)
-                output[i] += input[i];
+            if (gain == 1.0f) {
+                for (int i = 0; i < frames; ++i)
+                    output[i] += input[i];
+            } else {
+                for (int i = 0; i < frames; ++i)
+                    output[i] += input[i] * gain;
+            }
             return;
         }
         const int delay = std::min(delaySamples, capacity_);
@@ -70,7 +84,8 @@ public:
             int read = write - delay;
             if (read < 0)
                 read += size;
-            output[i] += buffer_[static_cast<std::size_t>(read)];
+            const float delayed = buffer_[static_cast<std::size_t>(read)];
+            output[i] += gain == 1.0f ? delayed : delayed * gain;
             if (++write == size)
                 write = 0;
         }

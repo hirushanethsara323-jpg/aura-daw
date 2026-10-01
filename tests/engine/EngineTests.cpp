@@ -139,6 +139,54 @@ TEST_CASE("A track with a send still plays through its own output", "[engine][re
     REQUIRE(peak == Approx(0.5f).margin(0.02f));
 }
 
+TEST_CASE("A send plays at the level it is set to", "[engine][sends][regression]") {
+    // REGRESSION: Send::level was stored, documented ("sends write into a
+    // destination node's input with a level") and never applied - every send played
+    // at unity, so a 25 % reverb send arrived as loud as the source.
+    //
+    // The measurement is the master peak of a 0.5 sine on the track: the dry route
+    // contributes 0.5 and the return contributes 0.5 * level, in phase, so the sum
+    // is arithmetic rather than a judgement call.
+    const auto renderPeak = [](float sendLevel) {
+        Fixture fixture;
+        audio::Track* track = fixture.project->mixer().findTrack(fixture.trackId);
+        REQUIRE(track != nullptr);
+
+        // The master limiter would compress a 1.0 peak, so the arithmetic under test
+        // (dry + level * wet) is measured without it: this test is about the send
+        // level, and the limiter is verified by its own tests.
+        fixture.project->mixer().masterLimiter().setBypassed(true);
+
+        const audio::TrackId busId = fixture.project->mixer().createTrack(audio::TrackKind::Bus, "Return");
+        audio::Send send;
+        send.destination = busId;
+        send.level = sendLevel;
+        send.enabled = true;
+        track->addSend(send);
+
+        TestDevice device;
+        engine::AudioEngine engine;
+        engine::EngineSettings settings;
+        settings.sampleRate = 48000.0;
+        settings.bufferSize = 256;
+        engine.setProject(fixture.project.get());
+        REQUIRE(static_cast<bool>(engine.initialise(&device, settings)));
+        REQUIRE(static_cast<bool>(engine.rebuildGraph()));
+
+        engine.transport().play();
+        float settling = 0.0f;
+        device.run(16, &settling); // the fader ramps settle in ~24 ms
+        float peak = 0.0f;
+        device.run(16, &peak);
+        return peak;
+    };
+
+    INFO("unity " << renderPeak(1.0f) << ", half " << renderPeak(0.5f) << ", zero " << renderPeak(0.0f));
+    REQUIRE(renderPeak(0.0f) == Approx(0.5f).margin(0.02f));  // dry only
+    REQUIRE(renderPeak(0.5f) == Approx(0.75f).margin(0.02f)); // dry + half-level return
+    REQUIRE(renderPeak(1.0f) == Approx(1.0f).margin(0.02f));  // dry + unity return
+}
+
 TEST_CASE("The engine renders project audio through the graph", "[engine]") {
     Fixture fixture;
     TestDevice device;

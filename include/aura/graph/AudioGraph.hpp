@@ -69,6 +69,10 @@ struct InputEdge {
     /// Samples of delay applied to this edge. 0 = the edge is already as late as
     /// the node's latest input.
     int compensationSamples = 0;
+    /// Linear gain applied to this edge while summing. 1.0 for a routing
+    /// connection; a send's level for a send. It belongs on the connection
+    /// because one source can feed several destinations at different levels.
+    float gain = 1.0f;
 };
 
 /// A graph node. Buffers are owned by the graph (planar, max block size), so
@@ -335,7 +339,13 @@ class GraphBuilder {
 public:
     NodeId createNode(NodeKind kind, std::string name);
     void addNode(std::shared_ptr<GraphNode> node);
-    void connect(NodeId source, NodeId destination);
+
+    /// Connects `source` to `destination` with an optional linear edge gain - a
+    /// routing connection is unity, a send carries its level. Connecting the same
+    /// pair twice adds the gains instead of adding a second edge: two paths with
+    /// identical endpoints sum, and a duplicate edge would otherwise be summed
+    /// twice and inflate the in-degree that drives the topological order.
+    void connect(NodeId source, NodeId destination, float gain = 1.0f);
     void setMasterNode(NodeId id) noexcept { masterNode_ = id; }
 
     /// Delay compensation on/off (mirrors EngineSettings::delayCompensation).
@@ -354,8 +364,16 @@ public:
     [[nodiscard]] GraphNode* find(NodeId id) const noexcept;
 
 private:
+    /// One connection in the builder's edge list: endpoints plus the gain the
+    /// destination applies while summing (see InputEdge::gain).
+    struct Connection {
+        NodeId source = kInvalidNodeId;
+        NodeId destination = kInvalidNodeId;
+        float gain = 1.0f;
+    };
+
     std::vector<std::shared_ptr<GraphNode>> nodes_;
-    std::vector<std::pair<NodeId, NodeId>> connections_;
+    std::vector<Connection> connections_;
     NodeId nextId_ = 1;
     NodeId masterNode_ = kInvalidNodeId;
     bool compensationEnabled_ = true;

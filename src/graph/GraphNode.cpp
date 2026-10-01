@@ -169,12 +169,18 @@ void GraphNode::sumFrom(const GraphNode& source, int numFrames) noexcept {
             [](const EdgeRef& ref, NodeId id) { return ref.source < id; });
         if (found != edgeLookup_.end() && found->source == source.id() &&
             found->index < edgeDelays_.size()) {
-            const int delay = inputEdges_[found->index].compensationSamples;
-            if (delay > 0) {
+            const InputEdge& edge = inputEdges_[found->index];
+            // A send at zero level carries nothing: skip it entirely rather than
+            // running a block of multiply-accumulate into silence.
+            if (edge.gain == 0.0f)
+                return;
+            const int delay = edge.compensationSamples;
+            if (delay > 0 || edge.gain != 1.0f) {
                 for (int channel = 0; channel < channels; ++channel) {
                     edgeDelays_[found->index].sumDelayed(
                         source.channelPointers()[channel],
-                        channelPointers_[static_cast<std::size_t>(channel)], frames, delay);
+                        channelPointers_[static_cast<std::size_t>(channel)], frames, delay,
+                        edge.gain);
                 }
                 if (frames > 0)
                     inputActive_ = true;
@@ -183,6 +189,7 @@ void GraphNode::sumFrom(const GraphNode& source, int numFrames) noexcept {
         }
     }
 
+    // No edge entry (a source that feeds us without being in the table): unity sum.
     for (int channel = 0; channel < channels; ++channel) {
         float* destination = channelPointers_[static_cast<std::size_t>(channel)];
         const float* input = source.channelPointers()[channel];
@@ -309,20 +316,27 @@ GraphNode* GraphBuilder::find(NodeId id) const noexcept {
     return nullptr;
 }
 
-void GraphBuilder::connect(NodeId source, NodeId destination) {
+void GraphBuilder::connect(NodeId source, NodeId destination, float gain) {
     if (source == kInvalidNodeId || destination == kInvalidNodeId || source == destination)
         return;
+    if (!(gain > 0.0f))
+        gain = 0.0f; // NaN-safe; a zero-gain edge is silent but still routed
+    if (gain > 1.0f)
+        gain = 1.0f; // a connection cannot amplify; sends are 0..1
 
     // One edge per (source, destination) pair. A repeated connect() must not add a
     // second edge: the audio would be summed twice and the in-degree that drives
     // Kahn's ordering (and the incoming-connection count that drives clearing)
-    // would be inflated.
-    const auto duplicate = std::find(connections_.begin(), connections_.end(),
-                                     std::pair<NodeId, NodeId>{source, destination});
-    if (duplicate != connections_.end())
-        return;
+    // would be inflated. Two nominal edges with the same endpoints do sum, though,
+    // so their gains add (a unity route plus a send into the same destination).
+    for (Connection& connection : connections_) {
+        if (connection.source == source && connection.destination == destination) {
+            connection.gain = std::min(1.0f, connection.gain + gain);
+            return; // the edge table is rebuilt from this list anyway
+        }
+    }
 
-    connections_.emplace_back(source, destination);
+    connections_.push_back(Connection{source, destination, gain});
     if (GraphNode* node = find(source))
         node->addDestination(destination);
 }
@@ -343,7 +357,9 @@ std::shared_ptr<GraphPlan> GraphBuilder::build(std::string* outError) const {
         return nodes_.size(); // sentinel (ignored)
     };
 
-    for (const auto& [source, destination] : connections_) {
+    for (const Connection& connection : connections_) {
+        const NodeId source = connection.source;
+        const NodeId destination = connection.destination;
         const std::size_t s = indexOf(source);
         const std::size_t d = indexOf(destination);
         if (s >= nodes_.size() || d >= nodes_.size())
@@ -429,12 +445,12 @@ std::shared_ptr<GraphPlan> GraphBuilder::build(std::string* outError) const {
 
         std::vector<InputEdge> edges;
         int latestInput = 0;
-        for (const auto& [source, destination] : connections_) {
-            if (destination != id || !plan->find(source))
+        for (const Connection& connection : connections_) {
+            if (connection.destination != id || !plan->find(connection.source))
                 continue;
-            const int latency = latencyOf(source);
+            const int latency = latencyOf(connection.source);
             latestInput = std::max(latestInput, latency);
-            edges.push_back(InputEdge{source, 0});
+            edges.push_back(InputEdge{connection.source, 0, connection.gain});
         }
         for (InputEdge& edge : edges) {
             edge.compensationSamples =
