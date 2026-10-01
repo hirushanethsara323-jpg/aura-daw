@@ -99,6 +99,71 @@ gateway (control thread)      audio thread                sandbox process
 * No sandbox yet means the crash story leans on recovery, and the docs must say so
   plainly rather than implying isolation exists.
 
+## What implementing the host taught us (M6)
+
+Everything below was found while writing `src/plugin/vst3/` and the test suite that
+verifies it against a real bundle, and each item is now pinned by a test or a comment
+in the code so it cannot be re-learned the hard way. They are recorded here because
+they are properties of the *format and the SDK*, not of AURA's code.
+
+**The SDK's libraries are not a complete host.** `sdk_hosting`, `sdk_common`, `base`
+and `pluginterfaces` do not contain `PlugProvider` (component/controller creation and
+connection), `MemoryStream` (the `IBStream` every state save/restore goes through) or
+the platform module loader (`dlopen`/`LoadLibrary`). The SDK compiles them per hosting
+example, so a host names the files itself — verified with `nm` over the built
+libraries, not assumed. AURA compiles them into one object library so the third-party
+files stay outside its own warning gate.
+
+**`ProcessData::prepare(component, blockSize, …)` treats a non-zero block size as an
+allocation request.** It then allocates its own per-channel buffers and *silently
+refuses* `setChannelBuffers()` (returns false, no error). A host that passes its real
+block size gets a plug-in processing into memory nobody reads while the engine's audio
+never leaves the track — a DAW that hosts plug-ins and hears nothing back. The SDK's
+own test suite and `basewrapper.cpp` pass 0 for exactly this reason; the host owns the
+buffers and wires them per block.
+
+**A single-component plug-in must not be initialised twice.** When
+`getControllerClassId()` returns `kNotImplemented`, the component *is* the controller
+(`SingleComponentEffect`, the common shape for effects). Calling `initialize()` on that
+same object a second time to "initialise the controller" fails, which is how a scanner
+ends up rejecting perfectly good plug-ins.
+
+**Include order is not cosmetic.** `public.sdk/source/vst/vstsinglecomponenteffect.h`
+`#define`s `setState`/`getState` to `setEditorState`/`getEditorState` for the duration
+of its own includes and `#undef`s them afterwards. Any SDK header parsed inside that
+window sees the wrong names (`marked 'override', but does not override`). It has to be
+included first among the `public.sdk` headers, or through it.
+
+**Latency is a moving number.** `getLatencySamples()` is the group delay the host has
+to compensate for, and the format expects the host to re-read it when the plug-in asks
+for a restart with `kLatencyChanged` — and after `setState`/`setComponentState`,
+because plug-in state can carry a latency-setting value. Reading it once at activation
+means compensating with a stale number whenever either happens; the M6 tests caught
+exactly that (a delay parameter used as latency, restored from state).
+
+**Parameter changes have a host-side lock-free path**, which is easy to miss:
+`ParameterChangeTransfer` is a ring the control thread writes and the audio thread
+drains into `ParameterChanges` for `ProcessData::inputParameterChanges`. Queues must be
+sized before the audio thread runs (`ParameterChanges::setMaxParameters`) — the default
+grow-on-demand path allocates inside `process()`.
+
+**Small API facts that cost compile cycles and are cheaper written down:**
+`EventList` has `setMaxSize`, not `setMaxEvents`; `VST3::Hosting::Module` has a
+protected destructor (use `Module::Ptr`); `VST3::Optional<ClassInfo>` is not assignable
+from a `ClassInfo` lvalue; `ViewType` and `PlugType` are namespaces, not types, so a
+`using` declaration for them is ill-formed (`ViewType::kEditor` is spelled in full);
+`createInstance` through the raw factory interface takes an `IID`, not a `FUID`.
+
+**Platform facts.** On Windows a bundle is
+`<name>.vst3/Contents/x86_64-win/<name>.vst3` — the binary itself carries the `.vst3`
+extension and must be named after the bundle folder — while Linux uses
+`Contents/<machine>-linux/<name>.so`; a bare shared library is not a bundle on either.
+The SDK builds against the dynamic CRT by default (`SMTG_USE_STATIC_CRT`), so a host
+that ships the static CRT has to say so or MSVC refuses to link the two (LNK2038, then
+unresolved `__imp_*` CRT symbols). And a process that crashes on Windows can sit in
+Windows Error Reporting for seconds before it dies, which is why a *scanner* needs a
+timeout rather than only crash detection.
+
 ## Sources
 
 * librearts.org, *Steinberg relicenses VST3 and ASIO* (Nov 2025) — VST3 → MIT,
@@ -113,3 +178,10 @@ gateway (control thread)      audio thread                sandbox process
   expressions, thread-safe multicore design.
 * multitrackstudio.com, *CLAP plugins* — MIT confirmation and per-platform
   plug-in directories.
+* Steinberg, *VST 3 API documentation — `IAudioProcessor`* (`getLatencySamples()`,
+  `kLatencyChanged`) and the VST 3 processing FAQ (a bypassed plug-in still emits a
+  copy of its input, delayed if it has latency): the contract the adapter implements.
+* Steinberg, *VST 3 API documentation — hosting* (`ProcessData`, `EventList`,
+  `ParameterChanges`, `MemoryStream`) and the *VST 3 usage guidelines* (bundle layout,
+  `module_win32`/`module_linux` platform directories): read for the implementation
+  notes above, not summarised from elsewhere.
