@@ -17,6 +17,7 @@ costs us.
 | 1 | [AUDIO_BACKEND_RESEARCH.md](AUDIO_BACKEND_RESEARCH.md) | WASAPI shared/exclusive, ASIO, device model, latency |
 | 2 | [UI_FRAMEWORK_RESEARCH.md](UI_FRAMEWORK_RESEARCH.md) | JUCE vs Qt vs Dear ImGui vs first-party Win32/Direct2D |
 | 3 | [PLUGIN_FORMAT_RESEARCH.md](PLUGIN_FORMAT_RESEARCH.md) | VST3 (MIT), CLAP (MIT), hosting and crash isolation |
+| 3a | [PLUGIN_SANDBOX_RESEARCH.md](PLUGIN_SANDBOX_RESEARCH.md) | Out-of-process plug-in hosting: policies, shared-memory transport, crash protocol, job objects, editor windows |
 | 4 | [DSP_ALGORITHM_RESEARCH.md](DSP_ALGORITHM_RESEARCH.md) | Filters, dynamics, delay, reverb, metering, loudness |
 | 5 | [AUDIO_FILE_FORMAT_RESEARCH.md](AUDIO_FILE_FORMAT_RESEARCH.md) | Recording and export formats, dither, RF64 |
 | 6 | [PROJECT_FORMAT_RESEARCH.md](PROJECT_FORMAT_RESEARCH.md) | The `.aura` container, atomic save, autosave, recovery |
