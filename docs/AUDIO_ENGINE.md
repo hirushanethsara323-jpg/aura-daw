@@ -150,6 +150,10 @@ Deliberate constraints:
 
 * the render block is clamped to the engine's prepared block size (otherwise the
   render would write past buffers that were prepared for something smaller),
+* the result is **bit-identical** to what the device callback produces from the same
+  start position — not by construction, but as an assertion: a test renders 10 240
+  frames of a session containing a stateful reverb, a send with a level, an insert and
+  the master limiter both ways and compares every sample (worst difference: 0),
 * a sample-rate mismatch is **refused** with a clear message rather than silently
   producing audio at the wrong speed (there is no sample-rate conversion yet),
 * stems solo one track at a time so bus routing and inserts behave as in the

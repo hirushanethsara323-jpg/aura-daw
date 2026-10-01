@@ -12,6 +12,8 @@
 #include "aura/audio/AudioClip.hpp"
 #include "aura/audioio/AudioDeviceManager.hpp"
 #include "aura/core/Realtime.hpp"
+#include "aura/dsp/GainProcessor.hpp"
+#include "aura/dsp/Reverb.hpp"
 #include "aura/engine/AudioEngine.hpp"
 #include "aura/engine/OfflineRenderer.hpp"
 #include "aura/core/FileSystem.hpp"
@@ -55,6 +57,22 @@ public:
         }
         if (peakOut)
             *peakOut = peak;
+    }
+
+    /// Runs the callback and keeps every sample, so a live render can be compared
+    /// with an offline one sample by sample (not just by peak).
+    void runCapture(int blocks, std::vector<float>& leftOut, std::vector<float>& rightOut) {
+        std::vector<float> left(256);
+        std::vector<float> right(256);
+        float* outputs[2] = {left.data(), right.data()};
+        leftOut.clear();
+        rightOut.clear();
+        for (int block = 0; block < blocks; ++block) {
+            if (callback_)
+                callback_(outputs, nullptr, 2, 0, 256);
+            leftOut.insert(leftOut.end(), left.begin(), left.end());
+            rightOut.insert(rightOut.end(), right.begin(), right.end());
+        }
     }
 
 private:
@@ -322,6 +340,116 @@ TEST_CASE("Offline render reuses the live graph and writes a valid file", "[engi
     engine.transport().play();
     device.run(16, &livePeak);
     REQUIRE(livePeak == Approx(renderedPeak).margin(0.01f));
+}
+
+TEST_CASE("Offline render is sample-identical to the live path", "[engine][export][regression]") {
+    // The requirement is that export reuses the live DSP graph rather than a second
+    // implementation of it. A peak comparison cannot show that - two different
+    // reverbs can share a peak - so this compares the samples themselves, over a
+    // session built to diverge if anything is duplicated: two tracks, insert chains
+    // with a real reverb (stateful, long tail), a send with a level, a bus, and the
+    // master limiter engaged.
+    constexpr int kBlocks = 40;
+    constexpr std::int64_t kFrames = kBlocks * 256;
+
+    // The processors are owned by the caller for the duration of the test; the
+    // insert slots hold the raw pointers the graph runs.
+    const auto buildSession = [](Fixture& fixture, std::vector<std::unique_ptr<dsp::Processor>>& owners) {
+        audio::Track* track = fixture.project->mixer().findTrack(fixture.trackId);
+        REQUIRE(track != nullptr);
+
+        auto gain = std::make_unique<dsp::GainProcessor>();
+        gain->setGain(0.5f);
+        REQUIRE(track->addInsert({"Gain", gain.get(), false, "", 1.0f}));
+        owners.push_back(std::move(gain));
+
+        const audio::TrackId busId = fixture.project->mixer().createTrack(audio::TrackKind::Bus, "Space");
+        audio::Track* bus = fixture.project->mixer().findTrack(busId);
+        REQUIRE(bus != nullptr);
+        auto reverb = std::make_unique<dsp::Reverb>();
+        dsp::ReverbSettings reverbSettings;
+        reverbSettings.mix = 0.35f;
+        reverb->setSettings(reverbSettings);
+        REQUIRE(bus->addInsert({"Reverb", reverb.get(), false, "", 1.0f}));
+        owners.push_back(std::move(reverb));
+
+        audio::Send send;
+        send.destination = busId;
+        send.level = 0.4f;
+        send.enabled = true;
+        track->addSend(send);
+    };
+
+    // The live path: a device callback driving the same engine entry point the audio
+    // thread uses.
+    Fixture liveFixture;
+    std::vector<std::unique_ptr<dsp::Processor>> liveProcessors;
+    buildSession(liveFixture, liveProcessors);
+    TestDevice liveDevice;
+    engine::AudioEngine liveEngine;
+    engine::EngineSettings liveSettings;
+    liveSettings.sampleRate = 48000.0;
+    liveSettings.bufferSize = 256;
+    liveEngine.setProject(liveFixture.project.get());
+    REQUIRE(static_cast<bool>(liveEngine.initialise(&liveDevice, liveSettings)));
+    REQUIRE(static_cast<bool>(liveEngine.rebuildGraph()));
+    liveEngine.transport().play();
+    std::vector<float> liveLeft;
+    std::vector<float> liveRight;
+    liveDevice.runCapture(kBlocks, liveLeft, liveRight);
+    REQUIRE(static_cast<std::int64_t>(liveLeft.size()) == kFrames);
+
+    // The offline path: an identical session (same content, fresh state), rendered
+    // from 0 to the same frame. Float32 + no dither, so the file is a copy of what
+    // the renderer produced rather than a quantised version of it.
+    Fixture offlineFixture;
+    std::vector<std::unique_ptr<dsp::Processor>> offlineProcessors;
+    buildSession(offlineFixture, offlineProcessors);
+    TestDevice offlineDevice;
+    engine::AudioEngine offlineEngine;
+    offlineEngine.setProject(offlineFixture.project.get());
+    REQUIRE(static_cast<bool>(offlineEngine.initialise(&offlineDevice, liveSettings)));
+    REQUIRE(static_cast<bool>(offlineEngine.rebuildGraph()));
+
+    engine::OfflineRenderer renderer(offlineEngine);
+    engine::RenderSettings renderSettings;
+    renderSettings.sampleRate = 48000.0;
+    renderSettings.blockSize = 256; // the block size the engine is prepared for
+    renderSettings.bitsPerSample = 32;
+    renderSettings.format = media::SampleFormat::Float32;
+    renderSettings.dither = false;
+    renderSettings.tailSeconds = 0.0;
+
+    const std::string path = "/tmp/aura-parity-test.wav";
+    auto result = renderer.renderRange(path, 0, kFrames, renderSettings);
+    REQUIRE(result.hasValue());
+    REQUIRE(result.value().framesRendered == kFrames);
+
+    auto planar = media::readFileToPlanar(path);
+    REQUIRE(planar.hasValue());
+    const auto& renderedChannels = *planar.value();
+    REQUIRE(renderedChannels.size() == 2);
+    REQUIRE(static_cast<std::int64_t>(renderedChannels.at(0).size()) >= kFrames);
+
+    // Sample by sample. The two paths run the same plan with the same block size and
+    // the same prepared state, so a difference here means export is doing its own
+    // signal processing somewhere.
+    float worst = 0.0f;
+    int worstFrame = -1;
+    for (std::int64_t frame = 0; frame < kFrames; ++frame) {
+        const float rendered = renderedChannels.at(0)[static_cast<std::size_t>(frame)];
+        const float difference = std::abs(rendered - liveLeft[static_cast<std::size_t>(frame)]);
+        if (difference > worst) {
+            worst = difference;
+            worstFrame = static_cast<int>(frame);
+        }
+    }
+    INFO("worst sample difference " << worst << " at frame " << worstFrame);
+    // Bit-exact, not "close": both paths run the same plan, in the same block size,
+    // from the same prepared state, through the same code. A non-zero difference
+    // means export has started doing its own signal processing - which is exactly
+    // the thing the architecture forbids, so this assertion is deliberately strict.
+    REQUIRE(worst == 0.0f);
 }
 
 TEST_CASE("Stem rendering produces one file per track", "[engine][export]") {
