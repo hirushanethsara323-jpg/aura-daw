@@ -7,6 +7,7 @@
 // ============================================================================
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 
 #include "aura/audio/AudioClip.hpp"
 #include "aura/audioio/AudioDeviceManager.hpp"

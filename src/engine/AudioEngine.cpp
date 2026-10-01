@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <unordered_map>
 
 #include "aura/core/Log.hpp"
 #include "aura/core/Sort.hpp"

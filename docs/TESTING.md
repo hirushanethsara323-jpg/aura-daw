@@ -89,20 +89,30 @@ not, assert the property that matters (bounded, monotone, below a threshold) —
 write the reasoning into the test as a comment, because a future reader will
 otherwise "fix" the tolerance.
 
-### 5. Real-time safety
+### 5. Static gates and real-time safety
 
-Question answered: *is the audio thread still allowed to be an audio thread?*
+Question answered: *is the audio thread still allowed to be an audio thread, and
+does the tree still build for the compiler that ships?*
 
-Two independent mechanisms:
+Three mechanisms:
 
-1. **Static** — `tools/rt_audit.py` (ctest `aura.static.realtime_audit`) scans the
-   functions reachable from the callback for allocation, container growth, locks,
-   file I/O, exceptions and logging. Heuristic by design; escapes require a written
-   reason on the line (`// rt-audit: allow - <why>`) and are printed in the output,
-   so an escape is visible.
+1. **Static, audio path** — `tools/rt_audit.py` (ctest
+   `aura.static.realtime_audit`) scans the functions reachable from the callback
+   for allocation, container growth, locks, file I/O, exceptions and logging.
+   Heuristic by design; escapes require a written reason on the line
+   (`// rt-audit: allow - <why>`) and are printed in the output, so an escape is
+   visible.
 2. **Dynamic** — `EngineTests` arms the allocation tracker
    (`rt::setTrackingEnabled` + `rt::resetRealtimeAllocationCount`) and renders a
    block through the engine, asserting `rt::realtimeAllocationCount() == 0`.
+3. **Static, portability** — `tools/include_audit.py` (ctest
+   `aura.static.include_audit`) checks that every file asks for the standard
+   headers it uses, resolving the *transitive project* include closure first. This
+   exists because libstdc++ hands `std::mutex`, `std::thread`, `std::chrono` and
+   friends out through unrelated headers, so a Linux build cannot tell you whether
+   MSVC will accept the file — and MSVC rejected exactly that in the second CI run
+   (`error C2039: 'mutex': is not a member of 'std'`). An escape carries a reason:
+   `#include <vector>   // include-audit: allow <chrono> - arrives via Time.hpp`.
 
 ## Running the layers you care about
 

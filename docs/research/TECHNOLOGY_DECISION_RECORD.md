@@ -174,7 +174,12 @@ live in the per-topic documents in this folder; this file is the index of record
   off in CI. Also rejected: naming locals after members and silencing `-Wshadow`
   instead of renaming the local.
 * **Consequences:** a new suppression must be a scoped `pragma push/pop` with a
-  comment saying why the warning is expected, plus an entry here. Both toolchains
+  comment saying why the warning is expected, plus an entry here. The rule has a
+  second, mechanical half: `tools/include_audit.py` (ctest
+  `aura.static.include_audit`) fails on a file that uses a standard type without
+  including its header, because libstdc++ supplies `std::mutex`, `std::thread`,
+  `std::chrono` and others transitively and MSVC's STL does not — the exact way the
+  *second* Windows CI run failed after the first fix landed. Both toolchains
   are in the matrix, so an asymmetry is caught by the first push rather than by a
   user. `docs/DEVELOPMENT.md` documents the contract for contributors.
 

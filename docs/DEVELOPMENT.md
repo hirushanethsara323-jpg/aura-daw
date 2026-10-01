@@ -68,6 +68,11 @@ a red CI job, so the flag sets are kept deliberately equal (ADR-0013):
   interface-imposed parameter cannot be dropped from the signature. Leave the
   parameter unnamed in the *definition* (`int /*numChannels*/`) and say why in a
   comment; `[[maybe_unused]]` is not needed.
+* **Ask for what you use.** Never rely on a transitive include: libstdc++ pulls
+  `std::mutex`, `std::thread` and `std::chrono` in through unrelated headers, MSVC
+  does not. `python3 tools/include_audit.py .` (ctest `aura.static.include_audit`)
+  fails the build if a file uses a standard type whose header is not in its include
+  closure. In a header, include `<cstdint>`, `<vector>`, … directly.
 * **Suppressions are rare, scoped and explained.** The tree's only one is
   `#pragma warning(disable : 4324)` around `SpscQueue` and `AudioRingBuffer`, where
   padding *is* the feature (one cache line per index). Wrap it in
@@ -132,11 +137,12 @@ setup work is done.
 | Tool | Use |
 |------|-----|
 | `tools/rt_audit.py` | RT-safety findings with file:line and why |
+| `tools/include_audit.py` | files that use a standard type without its header (MSVC will reject those) |
 | `tests/aura_tests "case" -s` | full expression output for a failing assertion |
 | `ctest --output-on-failure` | the same, for everything |
 | `AURA_ENABLE_ALLOC_TRACKING` | counts allocations; armed inside engine tests |
 | `AURA_LOG_*` + the log ring | structured logs, readable from the diagnostics panel |
-| `/tmp/model.cpp`, `/tmp/gain_probe.cpp` | historical reference harnesses (37 checks; gain ramp verification) |
+| `-DAURA_ENABLE_ALLOC_TRACKING=ON` | builds in the counter used by the dynamic RT test |
 
 ## Documentation rule
 

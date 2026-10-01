@@ -90,9 +90,12 @@ catch_discover_tests(aura_tests
   TEST_PREFIX "aura."
   PROPERTIES LABELS "unit")
 
-# The realtime-safety audit tool is a build target so CI can run it as a test.
+# The static audit tools run as tests so CI cannot forget them.
 if(AURA_BUILD_TESTS)
   add_test(NAME aura.static.realtime_audit
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/rt_audit.py
+                   ${CMAKE_SOURCE_DIR})
+  add_test(NAME aura.static.include_audit
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/include_audit.py
                    ${CMAKE_SOURCE_DIR})
 endif()

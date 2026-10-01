@@ -10,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <chrono>
 #include <thread>
 
 #include "aura/dsp/GainProcessor.hpp"

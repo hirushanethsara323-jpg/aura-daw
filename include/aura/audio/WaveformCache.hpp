@@ -29,6 +29,7 @@
 #include <future>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "aura/core/Errors.hpp"
