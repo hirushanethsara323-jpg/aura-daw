@@ -172,7 +172,7 @@ jobs:
             if ! head -n 12 "$f" | grep -q "SPDX-License-Identifier: GPL-3.0-or-later"; then
               echo "missing SPDX header: $f"; missing=1
             fi
-          done < <(find include src tests tools bench -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.py' \) 2>/dev/null)
+          done < <(find include src tests tools bench scripts -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.py' \) 2>/dev/null)
           exit $missing
       - name: Research documents are listed in the index
         run: |

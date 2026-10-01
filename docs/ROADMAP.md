@@ -45,6 +45,7 @@ honest answer to "where is it?".
 Labels: `area:engine`, `area:dsp`, `area:ui`, `area:plugins`, `area:project`,
 `area:build`, `area:docs`, `type:bug`, `type:feature`, `type:task`, `type:research`,
 `good first issue`, `priority:high|medium|low`. Issues are attached to the milestone
-above; `scripts/create_milestones.sh` creates the M0–M12 milestones and labels on
-GitHub with the contributor's own credentials (no credentials are stored in the
-repo).
+above; `scripts/github_setup.py` creates the labels, the M0–M12 milestones and the
+starter issues on GitHub from a `GITHUB_TOKEN` environment variable — idempotent,
+standard-library only, and it stores no credentials (see `SECURITY.md` and
+`DEVELOPMENT.md#repository-administration`).

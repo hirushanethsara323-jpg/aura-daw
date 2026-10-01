@@ -83,6 +83,20 @@ The audit prints every escape hatch, so an annotation is a visible decision.
 4. If it needs to reach the audio thread, it goes through `EngineCommandQueue`
    (POD payload only) — never by touching the graph directly.
 
+## Repository administration
+
+```bash
+GITHUB_TOKEN=<token> python3 scripts/github_setup.py owner/repo --issues --dry-run
+GITHUB_TOKEN=<token> python3 scripts/github_setup.py owner/repo --issues
+```
+
+Creates/updates the label set, the M0–M12 milestones (mirroring `ROADMAP.md`) and the
+starter issues; idempotent, so re-running after a roadmap change applies only the
+difference. The token comes from the environment and is never written to a file. For a
+long-lived setup prefer a **fine-grained** token limited to this repository with
+`Issues: write` and `Metadata: read` over a broad classic token, and revoke it when the
+setup work is done.
+
 ## Debugging tools in the tree
 
 | Tool | Use |
