@@ -18,6 +18,9 @@
 #   * `EnumAudioEndpoints(eRender | eCapture, ...)` passed an int where EDataFlow
 #     was expected - and, since eRender is 0 and eCapture is 1, would have
 #     enumerated capture endpoints only.
+#   * tests/plugin/SandboxEchoHelper.cpp called ControlChannel::adoptPair, a name that
+#     had been renamed - the file is tests/, so the src/ scan never looked at it, and
+#     the Linux build never compiles the `#if defined(_WIN32)` branch that used it.
 #
 # MinGW is *not* a supported AURA build target (MSVC is). This is a
 # syntax-and-types check for development and CI convenience, not a link test.
@@ -31,6 +34,19 @@
 #   --headers            also compile each public header standalone (slower,
 #                        catches headers that only build because of include
 #                        order).
+#   --tests              also compile tests/**. The test sources need Catch2, so this
+#                        needs --catch2-include (or AURA_CATCH2_INCLUDE): a
+#                        colon-separated list of include directories, normally
+#
+#                          <build>/_deps/catch2-src/src
+#                          <build>/_deps/catch2-build/generated-includes
+#
+#                        i.e. the sources plus the generated catch_user_config.hpp
+#                        from a configure of this tree. Without it the flag exits 2
+#                        rather than silently checking nothing - Windows-only branches
+#                        inside tests have hidden twice now, and a check that quietly
+#                        skips is worse than no check.
+#   --catch2-include D   same as setting AURA_CATCH2_INCLUDE=D.
 #
 # Ubuntu/Debian install:
 #   sudo apt-get install -y g++-mingw-w64-x86-64
@@ -45,12 +61,15 @@ SELF="${BASH_SOURCE[0]##*/}"
 
 REQUIRE=0
 HEADERS=0
+TESTS=0
 JOBS="$( (nproc 2>/dev/null || echo 2) )"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --require-toolchain) REQUIRE=1; shift ;;
         --headers)           HEADERS=1; shift ;;
+        --tests)             TESTS=1; shift ;;
+        --catch2-include)    AURA_CATCH2_INCLUDE="$2"; shift 2 ;;
         -j)                  JOBS="$2"; shift 2 ;;
         -h|--help)           sed -n '2,40p' "$ROOT/tools/$SELF"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 64 ;;
@@ -87,7 +106,22 @@ trap '[ -n "$HEADER_DIR" ] && rm -rf "$HEADER_DIR"; rm -f "$LOG" "$FAILED_LOG"' 
 # flags, so a cross-checked file is held to the same standard as a native build.
 check_file() {
     local file="$1" label="$2"
-    if ! "$CXX" -std=c++20 -I "$ROOT/include" \
+    local extra=() list value part parts
+    # Both lists are colon separated, because neither is one directory: Catch2's
+    # headers are in its src/ tree *and* its generated catch_user_config.hpp is in the
+    # build tree, and the test sources include from tests/, the repository root
+    # (fuzz/FuzzSupport.hpp) and src/plugin (ChildProcess.hpp).
+    for list in CATCH_INCLUDE TESTS_INCLUDE; do
+        value="${!list:-}"
+        if [ -n "$value" ]; then
+            parts=()
+            IFS=: read -r -a parts <<<"$value"
+            for part in "${parts[@]}"; do
+                if [ -n "$part" ]; then extra+=(-I "$part"); fi
+            done
+        fi
+    done
+    if ! "$CXX" -std=c++20 -I "$ROOT/include" -I "$ROOT/src/plugin/sandbox" "${extra[@]}" \
             -D_WIN32 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -DUNICODE -D_UNICODE \
             -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x0A00 \
             -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion \
@@ -97,7 +131,7 @@ check_file() {
     fi
 }
 export -f check_file
-export CXX ROOT LOG FAILED_LOG
+export CXX ROOT LOG FAILED_LOG CATCH_INCLUDE TESTS_INCLUDE
 
 echo "win_crosscheck: compiler $($CXX --version | head -n1)"
 
@@ -110,6 +144,47 @@ echo "win_crosscheck: compiler $($CXX --version | head -n1)"
 # for real, which is a better check than a syntax pass anyway.
 mapfile -t SOURCES < <(cd "$ROOT" && find src app bench -name '*.cpp' 2>/dev/null \
     | grep -v '^src/plugin/vst3/' | sort)
+
+# Test helpers that are Windows code in their own right and need no test framework.
+# Everything else under tests/ arrives with --tests; both exist because a Windows-only
+# branch inside a test has now lost two Windows rounds (a renamed method in the echo
+# helper, a missing <windows.h> in the case file), and nothing local compiled either.
+EXTRA_SOURCES=(tests/plugin/SandboxEchoHelper.cpp)
+for extra in "${EXTRA_SOURCES[@]}"; do
+    if [ -f "$ROOT/$extra" ]; then
+        SOURCES+=("$extra")
+    fi
+done
+
+if [ "$TESTS" = "1" ]; then
+    CATCH_INCLUDE="${AURA_CATCH2_INCLUDE:-}"
+    CATCH_OK=1
+    if [ -z "$CATCH_INCLUDE" ]; then
+        CATCH_OK=0
+    else
+        local_include_paths=()
+        IFS=: read -r -a local_include_paths <<<"$CATCH_INCLUDE"
+        for include_path in "${local_include_paths[@]}"; do
+            if [ -n "$include_path" ] && [ ! -d "$include_path" ]; then CATCH_OK=0; fi
+        done
+    fi
+    if [ "$CATCH_OK" = "0" ]; then
+        echo "win_crosscheck: --tests needs Catch2's include directories (AURA_CATCH2_INCLUDE or" >&2
+        echo "  --catch2-include), colon separated: <build>/_deps/catch2-src/src plus" >&2
+        echo "  <build>/_deps/catch2-build/generated-includes from a configure of this tree." >&2
+        exit 2
+    fi
+    # The VST 3 fixtures need the Steinberg SDK, which is fetched only with
+    # AURA_ENABLE_VST3=ON - the same reason src/plugin/vst3/ is excluded above, and
+    # the Linux "VST 3 hosting" job compiles and runs those for real.
+    mapfile -t TEST_SOURCES < <(cd "$ROOT" && find tests -name '*.cpp' 2>/dev/null \
+        | grep -v '^tests/plugin/vst3/' | grep -v 'Vst3HostingTests' | sort)
+    SOURCES+=("${TEST_SOURCES[@]}")
+    # Exactly the include directories the aura_tests target is given, plus tests/:
+    # "support/TestSignals.hpp" and "fuzz/FuzzSupport.hpp" are both included by path.
+    TESTS_INCLUDE="$ROOT/tests:$ROOT:$ROOT/src/plugin"
+    export TESTS_INCLUDE
+fi
 if [ "${#SOURCES[@]}" -eq 0 ]; then
     echo "win_crosscheck: no sources found - is this an AURA checkout?" >&2
     exit 2
