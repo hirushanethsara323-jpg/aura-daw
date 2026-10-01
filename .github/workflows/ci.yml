@@ -234,17 +234,27 @@ jobs:
   # Fast pre-flight for the Windows jobs: a MinGW-w64 cross compiler compiles every
   # Windows-only translation unit (and every public header standalone) on Linux.
   # It is not a supported build target - it is a type-and-warning check that runs
-  # in about a minute, which the 15-minute Windows matrix should not be used for.
+  # in a couple of minutes, which the 15-minute Windows matrix should not be used for.
+  #
+  # It also compiles tests/** now. Windows-only branches hide there too - a renamed
+  # method and a missing <windows.h> each cost a Windows round - and the Linux build
+  # never compiles those branches, so this is the only check that sees them without a
+  # Windows runner. Catch2's headers come from a configure of this tree (its
+  # catch_user_config.hpp is generated), which is why the step runs cmake first.
   windows-crosscheck:
     name: Windows cross-check
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Install MinGW-w64
-        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-mingw-w64-x86-64
+      - name: Fetch Catch2, so the test sources can be cross-checked too
+        run: cmake -S . -B build-deps -G Ninja -DAURA_BUILD_TESTS=ON
       - name: Compile the Windows-only code as Windows
-        run: bash tools/win_crosscheck.sh --require-toolchain --headers
+        run: |
+          bash tools/win_crosscheck.sh --require-toolchain --headers --tests \
+            --catch2-include "build-deps/_deps/catch2-src/src:build-deps/_deps/catch2-build/generated-includes"
 
   windows:
     name: Windows ${{ matrix.name }}

@@ -23,7 +23,9 @@
 #include <thread>
 #include <vector>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <windows.h> // WriteFile/PeekNamedPipe-free, but HANDLE and DWORD are not free
+#else
 #include <sys/socket.h>
 #endif
 
