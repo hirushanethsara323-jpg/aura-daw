@@ -199,6 +199,8 @@ add_library(aura_engine STATIC
   src/plugin/PluginHost.cpp
   src/plugin/ChildProcess.cpp
   src/plugin/sandbox/SharedMemory.cpp
+  src/plugin/sandbox/ControlChannel.cpp
+  src/plugin/sandbox/HelperProcess.cpp
   src/automation/Automation.cpp
   src/timeline/Timeline.cpp
   src/engine/AudioEngine.cpp

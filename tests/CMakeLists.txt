@@ -88,6 +88,7 @@ add_executable(aura_tests
   plugin/PluginTests.cpp
   plugin/ChildProcessTests.cpp
   plugin/SandboxTransportTests.cpp
+  plugin/ControlChannelTests.cpp
 )
 target_link_libraries(aura_tests PRIVATE Aura::Engine Aura::Dsp Aura::Core aura_test_support)
 
@@ -178,6 +179,26 @@ if(AURA_ENABLE_VST3)
   target_include_directories(aura_scan_host PRIVATE ${CMAKE_SOURCE_DIR}/src/plugin)
   add_dependencies(aura_tests aura_scan_host)
 endif()
+
+# ---------------------------------------------------------------------------
+# The sandbox control channel's second process (M7 phase 2).
+#
+# ControlChannelTests needs a *real* second process: it is the only way to prove
+# that inherited handles survive a spawn, that a crash is observable as an exit
+# code, and that a wedged peer meets a deadline instead of a hang. The helper is
+# tiny on purpose - it answers, crashes and sleeps on command, and it is not the
+# sandbox's own helper (`aura_plugin_host` arrives with the RT loop).
+#
+# It is built next to aura_tests so the test can find it by name, exactly like the
+# scanner helper above, and aura_tests depends on it so `ctest` never runs against
+# a binary that does not exist yet.
+# ---------------------------------------------------------------------------
+add_executable(aura_sandbox_echo_helper plugin/SandboxEchoHelper.cpp)
+target_link_libraries(aura_sandbox_echo_helper PRIVATE Aura::Engine)
+target_include_directories(aura_sandbox_echo_helper PRIVATE ${CMAKE_SOURCE_DIR}/src/plugin/sandbox)
+add_dependencies(aura_tests aura_sandbox_echo_helper)
+set_target_properties(aura_sandbox_echo_helper PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
 include(Catch)
 catch_discover_tests(aura_tests
