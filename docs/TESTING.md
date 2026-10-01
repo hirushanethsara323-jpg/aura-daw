@@ -234,8 +234,17 @@ cmake --build build-bench -j 2 --target aura_soak
 
 Exit codes: `0` pass, `1` the growth trend exceeded `--max-growth-mb-per-hour`,
 `2` bad arguments — so it works as a gate, not only as a report. CI runs two
-minutes of it in the Linux Debug job; the 8-hour campaign and its numbers are in
-[`PERFORMANCE.md`](PERFORMANCE.md).
+minutes of it in the Linux Debug job.
+
+The numbers from a twenty-minute rehabilitation run (12 tracks, recording on,
+inserts loaded) — `--minutes 20 --record --tracks 12`, exit code 0:
+
+| Blocks | Audio processed | Graph rebuilds | Takes | RSS min/max/final | Growth (limit 8 MB/h) |
+|--------|-----------------|----------------|-------|-------------------|-----------------------|
+| 95 837 769 | ≈ 5.9 days | 2 395 | 60 × 30 s (494 MB written, 8.2 MB peak, then deleted) | 30 / 31 / 31 MB | **+0.00 MB/hour** |
+
+The 8-hour acceptance campaign is still outstanding; [`PERFORMANCE.md`](PERFORMANCE.md)
+carries the full table and labels that row as a plan rather than a measurement.
 
 ## Running the layers you care about
 

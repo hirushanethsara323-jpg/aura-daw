@@ -201,11 +201,29 @@ quietly.
 | CI step (2 min) | 120 s | 256 | 8, no recording | 10 583 907 | 15.7 h | 20 → 20 MB | +0.00 MB/hour | **PASS** |
 | Local soak, recording on | 60 s | 256 | 16 | 4 348 485 | 6.4 h | 37 → 37 MB | +0.00 MB/hour | **PASS** |
 | ASAN build | 9 s | 256 | 4 | 13 281 | 0.02 h | 56 → 56 MB | +0.00 MB/hour | **PASS** (no ASAN/UBSAN finding) |
-| 8-hour campaign | in progress | 256 | 16 | — | — | — | — | writing `bench/results/soak-8h.json` |
+| Rehabilitation run, 2026-10-01 (`--record --tracks 12`) | 1 200 s | 256 | 12 | 95 837 769 | 5.9 days | 31 → 31 MB (min 30, max 31, final 31) | +0.00 MB/hour | **PASS** |
+| 8-hour campaign | not run yet | 256 | 16 | — | — | — | — | `bench/results/soak-8h.json` is where its JSON goes; see the note below |
 
 The first two rows are the numbers the CI gate and a one-minute local run produce;
-they are the *floor* of what is checked automatically. The 8-hour row is the M5
-acceptance campaign and is filled in from its JSON when it finishes.
+they are the *floor* of what is checked automatically.
+
+The twenty-minute row is the run that followed the memory fixes below: 60 takes of
+30 s each were written and deleted (494 MB in total, peak 8.2 MB per take, the
+per-take size guard never triggered), the graph was rebuilt 2 395 times, and resident
+memory moved by one megabyte across the whole run — the same megabyte the first half
+saw. 95.8 M blocks is about six days of audio, which is the useful property of this
+harness: a five-year-old laptop can put a multi-day session through the engine
+faster than a coffee break.
+
+The 8-hour row is the M5 acceptance campaign. It has **not** been run yet — it is
+the one number on this page that is a plan rather than a measurement, so it is marked
+as such instead of being estimated from the twenty-minute run. The extrapolation is
+the whole reason to run it: at +0.00 MB/hour the twenty-minute trend would predict
++0.00 MB over eight hours, but this harness's own history (below) is proof that a
+leak can be invisible at one scale and obvious at another. What the twenty-minute run
+does establish is that the harness survives a twenty-minute session with recording on
+at a stable footprint, so the eight-hour run is a scheduling question, not a research
+one.
 
 The 8-hour JSON is written with `"complete": false` after every sample and
 `"complete": true` at the end, so an interrupted campaign still leaves the trend
