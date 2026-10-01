@@ -15,8 +15,8 @@ cd build && ctest --output-on-failure          # everything
 python3 tools/rt_audit.py .                    # the static RT audit, by hand
 ```
 
-`ctest` runs **95 entries**: 94 Catch2 test cases (2687 assertions) plus one
-static-analysis test. Current status: all passing.
+`ctest` runs **104 entries**: 102 Catch2 test cases plus two static-analysis tests
+(`rt_audit` and `include_audit`). Current status: all passing.
 
 ## The five layers
 
@@ -30,6 +30,7 @@ Question answered: *does this component behave the way its header says?*
 | DSP | `tests/dsp/DspTests.cpp` | biquad vs. analytic magnitude, EQ band isolation, compressor knee, limiter ceiling, delay time, reverb finiteness/decay, distortion spectrum, oscillator frequency, envelope stages, level meter peak/RMS, loudness vs. BS.1770, smoothing ramps |
 | Time | `tests/time/TimeTests.cpp` | 960 PPQN, tempo → sample math, tempo change mid-song, BBT round trip, time signatures, SMPTE including 29.97 drop-frame |
 | Graph | `tests/graph/GraphTests.cpp` | destination clearing, topological order, cycle reporting, fader ramping, insert chain + bypass, memory stream, disk stream, `readWithSilence` |
+| Graph | `tests/graph/DelayCompensationTests.cpp` | delay compensation measured by where impulses *land*: aligned vs. misaligned arrivals, send vs. direct out, longest-path arithmetic, bypass, long-run ring stability, insert preparation, and the same property end-to-end through `AudioEngine` |
 | Audio | `tests/audio/AudioTests.cpp` | WAV 16/24/32-bit and float round trips, clip windows, split/trim/slip/normalise, mixer solo rules, insert latency, peak pyramid, take recording and interrupted-take recovery |
 | MIDI | `tests/midi/MidiTests.cpp` | message payloads, running status, quantise strength, sort/range, event windows, recorded-note baking, routing + panic, instrument lifecycle, voice stealing |
 | Project | `tests/project/ProjectTests.cpp` | `.aura` round trip, save-as collision, newer-format refusal, `.bak` recovery, media relink, autosave |

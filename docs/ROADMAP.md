@@ -27,8 +27,12 @@ honest answer to "where is it?".
 2. ASAN/UBSAN job findings triaged; MSVC ASAN attempt.
 3. Fuzz the manifest parser (`project.json`) and the WAV chunk parser.
 4. Memory-growth soak: 8 hours of simulated playback with recording on and off.
-5. Delay compensation: insert the dry-path delays that `compensatedLatency_` is
-   currently (correctly) reporting as zero.
+5. ~~Delay compensation: insert the dry-path delays.~~ **done** — per-edge
+   compensation in `GraphBuilder::build()`, delays in `dsp::DelayLine`, verified by
+   impulse measurements in `tests/graph/DelayCompensationTests.cpp`; see
+   `research/LATENCY_COMPENSATION_RESEARCH.md`. Remaining follow-ups: manual latency
+   override for plug-ins that misreport, and wiring VST3's `kLatencyChanged`
+   notification to a plan rebuild (M6/M7).
 6. SIMD decision, made from profile data rather than taste.
 
 ## Deliberate non-goals for v1

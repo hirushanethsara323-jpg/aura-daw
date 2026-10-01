@@ -40,13 +40,67 @@ still runs its limiter and meters, and the transport does not advance.
 totalLatencySamples() = device latency
                       + longest insert path in the graph (plan latency)
                       + master strip latency (the limiter's look-ahead)
-                      + inserted compensation delays (0 until M5)
 ```
 
 Rules: the number is what the engine can *justify*, not what sounds good in a
 comparison table. The master limiter is part of the graph's output path even though
-the engine runs it after the plan, so it is reported explicitly. A compensating
-delay that does not exist yet is not reported as if it did.
+the engine runs it after the plan, so it is reported explicitly.
+
+**Compensation delays are deliberately not in that sum.** Delay compensation does
+not make the session shorter — it delays the paths that are *early* so that parallel
+paths meet sample-aligned. The plan's `latencySamples()` is already the longest path
+in the graph, so adding `compensationSamples()` on top would report the same samples
+twice. The figures are reported separately, which is also how a mixing engineer reads
+them: "the session is 64 samples late" and "one connection was delayed 64 samples to
+line up" are two different statements.
+
+```
+plan.latencySamples()          longest path through the graph
+plan.compensationSamples()     total delay inserted to align parallel paths
+plan.compensatedEdges()        how many connections that delay is spread over
+```
+
+`AudioEngine::delayCompensationSamples()` and
+`compensatedConnectionCount()` publish the same numbers from the current plan, and
+`EngineSettings::delayCompensation` (a preference, default on) turns the mechanism
+off without removing the reported latencies.
+
+## Delay compensation
+
+Two paths that carry the same audio remeet after one of them passed through a
+look-ahead limiter, an oversampled distortion or a linear-phase EQ, and the copies
+arrive at different times. They then comb-filter — the hollow, phasey sound that is
+worse than the latency it came from. The graph fixes that by delaying the *shorter*
+path.
+
+```
+pathLatency[node] = max(pathLatency[inputs]) + node's own insert latency
+edge delay        = (the node's latest input) − pathLatency[source]
+plan latency      = the longest path in the graph
+```
+
+* The compensation is stored **per edge** (`graph::InputEdge`), not per node: one
+  node can feed several destinations whose path latencies differ, and a single delay
+  cannot serve both.
+* Each edge owns a `dsp::DelayLine`, sized in `prepare()` and never resized
+  afterwards, so `sumFrom()` allocates nothing on the audio thread. An edge with a
+  zero delay takes the plain summing path.
+* A bypassed processor contributes no latency (it does not run), so compensating for
+  it would *create* the misalignment — `InsertChain::totalLatencySamples()` skips
+  bypassed processors, exactly as `process()` does. Toggling bypass is a graph change.
+* The master strip is not part of the plan: the limiter runs after
+  `GraphPlan::process()` (step 7 above), so it is reported in the round-trip figure
+  and not compensated for — there is nothing after it to align it with.
+* **Live input monitoring is outside the compensation.** You cannot play a musician
+  before they play, so the monitor path carries the device's own latency and is not
+  an `InputEdge`. This is a documented limitation, not an oversight.
+* A plug-in that reports a wrong latency cannot be corrected by the host — the host
+  can only be consistent with what it is told. Per-processor latency is displayed so
+  the figure can be checked, and late latency reports (`restartComponent(kLatencyChanged)`
+  in VST3) mean "rebuild the plan", which the engine already supports.
+
+Design notes, alternatives and sources: `research/LATENCY_COMPENSATION_RESEARCH.md`.
+Verification (impulse-based, end-to-end): `tests/graph/DelayCompensationTests.cpp`.
 
 ## Windows system libraries
 

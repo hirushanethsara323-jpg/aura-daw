@@ -57,6 +57,40 @@ void GraphNode::prepare(double sampleRate, int maxBlockSize, int numChannels) {
     block_.channelPointers = channelPointers_.data();
     block_.numChannels = numChannels_;
     block_.numFrames = maxBlockSize_;
+
+    // Prepare the insert chain. The graph does not own the processors (the engine
+    // or the plug-in host does), but it is the graph that runs them, and prepare()
+    // is where a processor sizes its internal state - a look-ahead limiter's
+    // lookahead buffer, a filter's coefficients, a delay's ring. Node prepare() is
+    // the only control-thread call that knows the sample rate, block size and
+    // channel count the chain will actually run with, so it is the right place to
+    // do it. Processors must treat repeated prepare() as legal: a device change,
+    // a sample-rate change or a rebuild all land here again.
+    for (std::size_t i = 0; i < inserts_.size(); ++i) {
+        if (auto* processor = inserts_.at(i))
+            processor->prepare(rate, maxBlockSize_, numChannels_);
+    }
+
+    // Delay compensation: one line per incoming edge, sized to exactly what that
+    // edge needs. A node with no compensation allocates one float per edge, which
+    // keeps the "no latent processors in this session" case at zero cost.
+    edgeDelays_.clear();
+    edgeDelays_.resize(inputEdges_.size());
+    for (std::size_t i = 0; i < inputEdges_.size(); ++i)
+        edgeDelays_[i].prepare(inputEdges_[i].compensationSamples);
+
+    // A source-indexed view of the edge table, sorted once here so that sumFrom()
+    // can binary-search it on the audio thread. A linear scan would be O(inputs)
+    // per incoming connection - for a master fed by 48 tracks that is 2,304 id
+    // comparisons per block, for nothing. Sorting happens on the control thread
+    // and the search allocates nothing.
+    edgeLookup_.clear();
+    edgeLookup_.reserve(inputEdges_.size());
+    for (std::size_t i = 0; i < inputEdges_.size(); ++i)
+        edgeLookup_.push_back(EdgeRef{inputEdges_[i].source, static_cast<std::uint32_t>(i)});
+    std::sort(edgeLookup_.begin(), edgeLookup_.end(),
+              [](const EdgeRef& a, const EdgeRef& b) { return a.source < b.source; });
+
     prepared_ = true;
     reset();
 }
@@ -68,6 +102,10 @@ void GraphNode::reset() noexcept {
             processor->reset();
     }
     inputActive_ = false;
+    // A stale compensation delay would smear the first block after a seek or a
+    // rebuild, so the lines are cleared with the rest of the node state.
+    for (auto& line : edgeDelays_)
+        line.reset();
 }
 
 void GraphNode::clear(int numFrames) noexcept {
@@ -114,6 +152,33 @@ void GraphNode::sumFrom(const GraphNode& source, int numFrames) noexcept {
         return;
     const int frames = std::min(numFrames, maxBlockSize_);
     const int channels = std::min(numChannels_, source.numChannels_);
+
+    // Delay compensation is applied here, on the connection, because that is
+    // where the misalignment exists: the source has already added the latency of
+    // its own insert chain, and this edge is short by (latest input - source
+    // path). The lookup is a binary search over the edge table sorted in
+    // prepare(): no allocation, no hashing, and a cost that grows with log(inputs)
+    // rather than with the session size.
+    if (!edgeLookup_.empty()) {
+        const auto found = std::lower_bound(
+            edgeLookup_.begin(), edgeLookup_.end(), source.id(),
+            [](const EdgeRef& ref, NodeId id) { return ref.source < id; });
+        if (found != edgeLookup_.end() && found->source == source.id() &&
+            found->index < edgeDelays_.size()) {
+            const int delay = inputEdges_[found->index].compensationSamples;
+            if (delay > 0) {
+                for (int channel = 0; channel < channels; ++channel) {
+                    edgeDelays_[found->index].sumDelayed(
+                        source.channelPointers()[channel],
+                        channelPointers_[static_cast<std::size_t>(channel)], frames, delay);
+                }
+                if (frames > 0)
+                    inputActive_ = true;
+                return;
+            }
+        }
+    }
+
     for (int channel = 0; channel < channels; ++channel) {
         float* destination = channelPointers_[static_cast<std::size_t>(channel)];
         const float* input = source.channelPointers()[channel];
@@ -312,15 +377,73 @@ std::shared_ptr<GraphPlan> GraphBuilder::build(std::string* outError) const {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Delay compensation
+    // -----------------------------------------------------------------------
+    // Every insert chain adds latency to the signal that passes through it. When
+    // two paths meet - a dry path and a path through a look-ahead limiter, a send
+    // alongside the direct out - the shorter one has to be delayed by the
+    // difference, or the two arrive misaligned and comb-filter.
+    //
+    // The walk is a single pass over the topological order:
+    //   pathLatency[node] = max(pathLatency[source]) + node's own insert latency
+    //   edge delay        = max(pathLatency[source]) - pathLatency[source]
+    // which leaves every input of a node arriving together, and the latency of
+    // the longest chain (the one the engine reports) unchanged: compensation
+    // moves signals earlier in the mix, it does not shorten the chain.
+    //
+    // Node kinds are irrelevant here: a bus, an aux return and a track are all
+    // "a node with inputs and a chain". The one thing that cannot be compensated
+    // is a live input - you cannot play a musician before they play - so input
+    // monitoring is deliberately outside the plan (see docs/AUDIO_ENGINE.md).
+    std::vector<std::pair<NodeId, int>> pathLatency;
+    const auto latencyOf = [&pathLatency](NodeId id) {
+        for (const auto& [node, latency] : pathLatency) {
+            if (node == id)
+                return latency;
+        }
+        return 0;
+    };
+
+    int compensationTotal = 0;
+    int compensatedEdges = 0;
+    int longestPath = 0;
+    for (const NodeId id : order) {
+        GraphNode* node = plan->find(id);
+        if (!node)
+            continue;
+
+        std::vector<InputEdge> edges;
+        int latestInput = 0;
+        for (const auto& [source, destination] : connections_) {
+            if (destination != id || !plan->find(source))
+                continue;
+            const int latency = latencyOf(source);
+            latestInput = std::max(latestInput, latency);
+            edges.push_back(InputEdge{source, 0});
+        }
+        for (InputEdge& edge : edges) {
+            edge.compensationSamples =
+                compensationEnabled_ ? std::max(0, latestInput - latencyOf(edge.source)) : 0;
+        }
+        node->setInputEdges(std::move(edges));
+        for (const InputEdge& edge : node->inputEdges()) {
+            if (edge.compensationSamples > 0) {
+                compensationTotal += edge.compensationSamples;
+                ++compensatedEdges;
+            }
+        }
+
+        const int path = latestInput + node->inserts().totalLatencySamples();
+        pathLatency.emplace_back(id, path);
+        if (masterNode_ == kInvalidNodeId || id == masterNode_)
+            longestPath = std::max(longestPath, path);
+    }
+
+    plan->setLatencySamples(longestPath);
+    plan->setCompensationStats(compensationTotal, compensatedEdges);
     plan->setProcessingOrder(std::move(order));
     plan->setMasterNode(masterNode_);
-
-    int latency = 0;
-    for (const auto& node : nodes_) {
-        if (node)
-            latency = std::max(latency, node->inserts().totalLatencySamples());
-    }
-    plan->setLatencySamples(latency);
     return plan;
 }
 

@@ -183,6 +183,27 @@ Status AudioEngine::rebuildGraph() {
         }
     }
 
+    // Inserts are attached to the builder's nodes *before* build(), because the
+    // builder computes each node's insert latency to work out the compensation
+    // delays. Attaching them afterwards (as this used to) left the builder
+    // believing every chain was latency-free.
+    for (audio::Track* track : mixer.tracks()) {
+        if (!track)
+            continue;
+        const auto found = nodeIds.find(track->id());
+        if (found == nodeIds.end())
+            continue;
+        if (graph::GraphNode* node = builder.find(found->second)) {
+            node->inserts().clear();
+            for (auto& slot : track->inserts()) {
+                if (slot.processor)
+                    node->inserts().add(slot.processor);
+            }
+        }
+    }
+
+    builder.setDelayCompensationEnabled(settings_.delayCompensation);
+
     std::string error;
     auto plan = builder.build(&error);
     if (!error.empty())
@@ -195,44 +216,33 @@ Status AudioEngine::rebuildGraph() {
             node->prepare(settings_.sampleRate, settings_.bufferSize, channels);
     }
 
-    // Attach the track inserts to their nodes so the graph executes them.
-    for (audio::Track* track : mixer.tracks()) {
-        if (!track)
-            continue;
-        if (graph::GraphNode* node = plan->find(track->graphNodeId())) {
-            node->inserts().clear();
-            for (auto& slot : track->inserts()) {
-                if (slot.processor)
-                    node->inserts().add(slot.processor);
-            }
-        }
-    }
-
     const std::size_t nodeCount = plan->nodes().size();
+    const int planLatency = plan->latencySamples();
+    const int compensation = plan->compensationSamples();
+    const int compensatedEdges = plan->compensatedEdges();
     publishPlan(std::move(plan));
-    // The *reported* latency is derived on demand from the plan and the master
-    // strip (see totalLatencySamples()); the compensation delay that gets
-    // inserted into the dry paths is zero until applyDelayCompensation() lands.
-    compensatedLatency_.store(0, std::memory_order_relaxed);
-    AURA_LOG_INFO(kCategory, "Graph rebuilt: %zu nodes, %d samples insert latency", nodeCount,
-                  mixer.maximumInsertLatencySamples());
+
+    AURA_LOG_INFO(kCategory,
+                  "Graph rebuilt: %zu nodes, longest path %d samples, compensation %d samples "
+                  "across %d connection(s), master strip %d samples",
+                  nodeCount, planLatency, compensation, compensatedEdges,
+                  mixer.masterLatencySamples());
     return success();
 }
 
 int AudioEngine::totalLatencySamples() const noexcept {
-    // Accumulated in 64-bit because the compensation figure is int64; narrowing
-    // happens once, saturated, at the end.
+    // Accumulated in 64-bit; narrowing happens once, saturated, at the end.
     std::int64_t total = device_ ? device_->latencySamples() : 0;
-    // Insert chains (the plan reports the longest path) plus the master strip,
-    // which the engine runs after the graph and so is not part of the plan.
+    // The plan reports the latency of its longest path, which already includes
+    // the insert chains. Compensation delays are deliberately not added on top:
+    // they move the *shorter* paths later so everything lines up, they do not
+    // lengthen the chain the audio actually travels.
     if (activePlan_)
         total += activePlan_->latencySamples();
+    // The master strip runs after the graph (step 5 of processBlock), so it is
+    // part of the round trip but not part of the plan.
     if (project_)
         total += project_->mixer().masterLatencySamples();
-    // Delays actually inserted to align paths. applyDelayCompensation() is still
-    // a no-op, so this is zero until M5 - reporting a number here that no delay
-    // line backs would over-state the round trip.
-    total += compensatedLatency_.load(std::memory_order_relaxed);
     // The engine reports latency as int everywhere (device APIs and the graph
     // plans); saturate instead of wrapping if a pathological chain ever exceeds
     // INT_MAX samples of delay.
@@ -549,13 +559,14 @@ void AudioEngine::updateStatistics(std::uint64_t blockStartMicros, int numFrames
     statistics_.diskOverloaded.store(diskOverloaded, std::memory_order_relaxed);
 }
 
-void AudioEngine::applyDelayCompensation(int numFrames) noexcept {
-    (void)numFrames;
-    // Delay compensation is applied per path in the graph (each node's inserts
-    // report latency, and the plan reports the maximum). The remaining work -
-    // delaying *dry* paths to match - is scheduled with the mixer's
-    // compensation stage in M5; until then the reported latency is accurate and
-    // the limiter's is compensated on the master path.
+int AudioEngine::delayCompensationSamples() const noexcept {
+    const std::shared_ptr<graph::GraphPlan> plan = activePlan_;
+    return plan ? plan->compensationSamples() : 0;
+}
+
+int AudioEngine::compensatedConnectionCount() const noexcept {
+    const std::shared_ptr<graph::GraphPlan> plan = activePlan_;
+    return plan ? plan->compensatedEdges() : 0;
 }
 
 } // namespace aura::engine

@@ -141,6 +141,29 @@ makes the budget honest rather than optimistic.
 7. **`/fp:precise` and `-ffp-contract=off`**: reproducible DSP beats a few percent of
    floating-point throughput, and it keeps the analytic tests meaningful.
 
+### Delay compensation costs nothing measurable (2026-10-01)
+
+Delay compensation (per-edge delays on the paths that are early, ADR-0015) was
+measured the way a regression should be: the same 66-case suite, before and after,
+on the same machine, with the session cases compared pairwise.
+
+| Case | Before (ns/frame) | After | Delta |
+|------|-------------------|-------|-------|
+| `session-1x1` | 48.7 | 48.8 | +0.2 % |
+| `session-16x8` (256) | 180.2 | 180.1 | −0.1 % |
+| `session-16x8-fx` (256) | 1464.1 | 1421.3 | −2.9 % |
+| `session-48x8` (512) | 473.2 | 476.1 | +0.6 % |
+| `session-48x8-fx` (256) | 4814.6 | 4802.8 | −0.2 % |
+
+Every session case lands inside ±3 %, which is run-to-run noise on this machine
+(the `session-1x1/256` case showed +60 % in the first after-run and 48.8 ns on
+three immediate re-runs — a scheduling artefact of a shared 2-vCPU runner, not a
+regression; the 48-track session, which has 48 compensated-capable edges, is
+unchanged). The reason is structural: a session with no latent processor computes a
+delay of 0 for every edge, which takes the plain summing path with one extra
+`nodeId` comparison, and the per-edge lookup is a binary search over a table sorted
+once in `prepare()` rather than a scan.
+
 ## Measuring it yourself
 
 ```bash

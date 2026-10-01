@@ -146,6 +146,15 @@ public:
 
     /// Total reported latency: device + graph + master limiter.
     [[nodiscard]] int totalLatencySamples() const noexcept;
+    /// Delay compensation diagnostics (control thread).
+    ///
+    /// `delayCompensationSamples()` is how much delay the current plan inserts to
+    /// align parallel paths, summed over every compensated connection; it is what
+    /// the UI shows next to the round-trip latency so a user can see *why* a track
+    /// with a look-ahead limiter made the session later. It is not part of
+    /// `totalLatencySamples()` (see the comment there).
+    [[nodiscard]] int delayCompensationSamples() const noexcept;
+    [[nodiscard]] int compensatedConnectionCount() const noexcept;
 
 private:
     /// Copies track fader/pan/mute/solo state into the graph nodes. Called once
@@ -158,7 +167,6 @@ private:
     /// track's instrument into its graph node.
     void renderInstruments(int numFrames, const dsp::ProcessContext& context) noexcept;
     void renderRecording(int numFrames, const float* const* inputs, int numInputChannels) noexcept;
-    void applyDelayCompensation(int numFrames) noexcept;
     void updateStatistics(std::uint64_t blockStartMicros, int numFrames) noexcept;
 
     IAudioDevice* device_ = nullptr;
@@ -183,7 +191,6 @@ private:
         return livePlan_.load(std::memory_order_acquire);
     }
     std::atomic<bool> running_{false};
-    std::atomic<std::int64_t> compensatedLatency_{0};
 
     /// Scratch for MIDI events per block (preallocated: the audio thread must
     /// not allocate).

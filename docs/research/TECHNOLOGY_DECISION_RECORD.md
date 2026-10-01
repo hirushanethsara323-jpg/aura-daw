@@ -208,6 +208,40 @@ live in the per-topic documents in this folder; this file is the index of record
   says "it really builds and runs on Windows"; the cross-check only makes sure it
   is not asked to discover what a type checker can.
 
+## ADR-0015 — Delay compensation is per connection, and it delays the early path
+
+* **Accepted and implemented** (M5, issue #5). `GraphBuilder::build()` walks the
+  topological order once: `pathLatency[node] = max(pathLatency[inputs]) + own insert
+  latency`, and every incoming edge whose source path is shorter than the node's
+  latest input gets a delay of the difference. Delays live in a `dsp::DelayLine` per
+  edge, allocated in `prepare()`. `GraphPlan::latencySamples()` stays the *longest*
+  path, so switching compensation on does not change the reported round-trip figure.
+* **Why per edge and not per node:** an obvious first implementation gives each node
+  a delay of `longestPath − itsPathLatency`, which is wrong as soon as a node feeds
+  two destinations with different path latencies. Compensation is a property of the
+  connection, so that is where it is stored (`graph::InputEdge`).
+* **Why the early path and not read-ahead:** delaying the early path needs no future
+  audio, leaves the transport's meaning alone, and works with a live input in the
+  same graph. Read-ahead (Ardour's playback default) is better where it applies — it
+  keeps audio and timecode together — but it cannot be applied to a monitored input
+  and it redefines "play position" for every consumer. The mechanism lives in the
+  graph, so read-ahead remains an option for the transport layer later.
+* **Rejected:** reporting latency only and letting the user nudge tracks (silently
+  produces comb filtering when forgotten — manual override stays as a planned
+  affordance for plug-ins that *lie* about their latency); including the master
+  strip's look-ahead in the plan (the limiter runs after the plan, so there is
+  nothing downstream to align it with); compensating live monitoring (impossible
+  without time travel, documented as a limitation in `../AUDIO_ENGINE.md`).
+* **Consequences:** bypass is a graph change (a bypassed processor contributes no
+  latency, exactly as it produces no delay); the engine's plan rebuild is the
+  re-learning path for late latency reports (VST3 `kLatencyChanged`); and the tests
+  measure where impulses *land*, not what the plan claims — a compensation test that
+  only reads the number would pass with no compensation at all.
+* **Found while testing this:** `GraphNode::prepare()` now calls `prepare()` on the
+  processors in its insert chains. Nothing did before, so a track insert processed
+  with unprepared state (silent delay lines, garbage filters). Fixed as part of this
+  ADR, with a regression test.
+
 ---
 
 ## Open decisions

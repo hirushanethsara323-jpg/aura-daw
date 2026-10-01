@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "aura/core/Math.hpp"
+#include "aura/dsp/DelayLine.hpp"
 #include "aura/dsp/Processor.hpp"
 
 namespace aura::graph {
@@ -53,6 +54,22 @@ enum class NodeKind : std::int32_t {
 };
 
 const char* nodeKindName(NodeKind kind) noexcept;
+
+/// One incoming connection of a node, plus the delay that aligns it with the
+/// node's other inputs.
+///
+/// Delay compensation in three sentences: every insert chain adds latency to the
+/// signal passing through it; when two paths meet (a dry path and a path through a
+/// look-ahead limiter, or a send alongside the direct out) the shorter one must be
+/// delayed by the difference or the two arrive misaligned and comb-filter; the
+/// amount of delay is therefore per *edge*, not per node, because one node can feed
+/// several destinations with different path latencies behind them.
+struct InputEdge {
+    NodeId source = kInvalidNodeId;
+    /// Samples of delay applied to this edge. 0 = the edge is already as late as
+    /// the node's latest input.
+    int compensationSamples = 0;
+};
 
 /// A graph node. Buffers are owned by the graph (planar, max block size), so
 /// there is no allocation during processing and the layout is stable.
@@ -84,8 +101,30 @@ public:
     [[nodiscard]] const dsp::AudioBlockView& block() const noexcept { return block_; }
     [[nodiscard]] dsp::AudioBlockView& mutableBlock() noexcept { return block_; }
 
-    /// Sums `source` into this node's buffers (used to feed inputs from sends).
+    /// Sums `source` into this node's buffers (used to feed inputs from sends),
+    /// applying this connection's compensation delay. Audio thread.
     void sumFrom(const GraphNode& source, int numFrames) noexcept;
+
+    /// Declares the incoming connections and their compensation delays. Control
+    /// thread only, called by GraphBuilder before prepare(): the delay lines are
+    /// allocated in prepare() from the values set here.
+    void setInputEdges(std::vector<InputEdge> edges) {
+        compensationSamples_ = 0;
+        compensationEdgeCount_ = 0;
+        for (const InputEdge& edge : edges) {
+            if (edge.compensationSamples > 0) {
+                compensationSamples_ += edge.compensationSamples;
+                ++compensationEdgeCount_;
+            }
+        }
+        inputEdges_ = std::move(edges);
+    }
+    [[nodiscard]] const std::vector<InputEdge>& inputEdges() const noexcept { return inputEdges_; }
+    /// Total delay this node inserts on its incoming edges (diagnostics).
+    [[nodiscard]] int compensationSamples() const noexcept { return compensationSamples_; }
+    /// True when at least one incoming edge carries a delay, so the common
+    /// no-compensation case keeps the plain summing loop.
+    [[nodiscard]] bool hasCompensation() const noexcept { return compensationEdgeCount_ > 0; }
     /// Copies `source` into this node's buffers.
     void copyFrom(const GraphNode& source, int numFrames) noexcept;
     /// Fills this node's buffers with silence.
@@ -133,10 +172,18 @@ public:
         [[nodiscard]] dsp::Processor* at(std::size_t index) const noexcept {
             return index < processors_.size() ? processors_[index] : nullptr;
         }
+        /// Sum of the chain's reported latencies. Bypassed processors are skipped
+        /// for the same reason process() skips them: a bypassed look-ahead
+        /// limiter adds no delay, so compensating for it would mis-align the
+        /// paths instead of aligning them. (Toggling bypass during playback is
+        /// therefore a graph change: the engine rebuilds the plan, which is what
+        /// recomputes this number.)
         [[nodiscard]] int totalLatencySamples() const noexcept {
             int total = 0;
-            for (const auto* processor : processors_)
-                total += processor ? processor->latencySamples() : 0;
+            for (const auto* processor : processors_) {
+                if (processor && !processor->isBypassed())
+                    total += processor->latencySamples();
+            }
             return total;
         }
         void process(dsp::AudioBlockView& block, const dsp::ProcessContext& context) noexcept {
@@ -201,6 +248,23 @@ private:
 
     InsertChain inserts_;
     std::vector<NodeId> destinations_;
+
+    /// Incoming connections with their compensation delay, and one delay line per
+    /// edge (same index). The delay lines are sized in prepare() to exactly the
+    /// compensation they carry: a session with no latent processors allocates
+    /// nothing (DelayLine::prepare(0) still makes one slot per edge).
+    /// `(source, index into inputEdges_)`, sorted by source in prepare() so the
+    /// audio thread can find an edge with a binary search instead of a scan.
+    struct EdgeRef {
+        NodeId source = kInvalidNodeId;
+        std::uint32_t index = 0;
+    };
+
+    std::vector<InputEdge> inputEdges_;
+    std::vector<dsp::DelayLine> edgeDelays_;
+    std::vector<EdgeRef> edgeLookup_;
+    int compensationSamples_ = 0;
+    int compensationEdgeCount_ = 0;
 };
 
 /// Immutable, topologically sorted processing plan. Swapped atomically into the
@@ -214,13 +278,26 @@ public:
     void setProcessingOrder(std::vector<NodeId> order) { order_ = std::move(order); }
     void setMasterNode(NodeId id) noexcept { masterNode_ = id; }
     void setLatencySamples(int samples) noexcept { latencySamples_ = samples; }
+    /// How much delay compensation this plan inserts, and across how many edges.
+    void setCompensationStats(int samples, int edges) noexcept {
+        compensationSamples_ = samples;
+        compensatedEdges_ = edges;
+    }
 
     [[nodiscard]] const std::vector<std::shared_ptr<GraphNode>>& nodes() const noexcept {
         return nodes_;
     }
     [[nodiscard]] const std::vector<NodeId>& processingOrder() const noexcept { return order_; }
     [[nodiscard]] NodeId masterNode() const noexcept { return masterNode_; }
+    /// Latency of the longest path through the graph, in samples: what the
+    /// engine reports and what the transport compensates for. Latency that is
+    /// common to every path (the master strip) is added to it separately.
     [[nodiscard]] int latencySamples() const noexcept { return latencySamples_; }
+    /// Total compensation delay inserted anywhere in the plan (diagnostics: it is
+    /// alignment, not added round-trip latency, so it is NOT part of
+    /// latencySamples()).
+    [[nodiscard]] int compensationSamples() const noexcept { return compensationSamples_; }
+    [[nodiscard]] int compensatedEdges() const noexcept { return compensatedEdges_; }
     [[nodiscard]] GraphNode* find(NodeId id) const noexcept;
 
     /// Processes the whole plan for `numFrames`. Audio thread.
@@ -232,6 +309,8 @@ private:
     std::vector<NodeId> order_;
     NodeId masterNode_ = kInvalidNodeId;
     int latencySamples_ = 0;
+    int compensationSamples_ = 0;
+    int compensatedEdges_ = 0;
 };
 
 /// Builder used by the engine (control thread) to describe routing in plain
@@ -242,6 +321,12 @@ public:
     void addNode(std::shared_ptr<GraphNode> node);
     void connect(NodeId source, NodeId destination);
     void setMasterNode(NodeId id) noexcept { masterNode_ = id; }
+
+    /// Delay compensation on/off (mirrors EngineSettings::delayCompensation).
+    /// When off, no delays are inserted and parallel paths stay misaligned - the
+    /// choice a user makes when they would rather have the lower latency.
+    void setDelayCompensationEnabled(bool enabled) noexcept { compensationEnabled_ = enabled; }
+    [[nodiscard]] bool delayCompensationEnabled() const noexcept { return compensationEnabled_; }
 
     /// Sorts nodes topologically (Kahn's algorithm) and returns the plan.
     /// Cycles are broken deterministically and reported through `outError`.
@@ -257,6 +342,7 @@ private:
     std::vector<std::pair<NodeId, NodeId>> connections_;
     NodeId nextId_ = 1;
     NodeId masterNode_ = kInvalidNodeId;
+    bool compensationEnabled_ = true;
 };
 
 } // namespace aura::graph
