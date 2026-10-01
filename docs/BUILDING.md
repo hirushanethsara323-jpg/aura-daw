@@ -86,6 +86,23 @@ anything; it exists because three Windows CI rounds were lost to problems it fin
 instantly (see ADR-0014). `--require-toolchain` makes a missing cross compiler an
 error, which is how the CI job uses it.
 
+## Benchmarks
+
+Benchmarks are off by default and are never part of `ctest` (a shared CI machine
+would decide the numbers):
+
+```bash
+cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DAURA_BUILD_BENCHMARKS=ON
+cmake --build build-bench -j 2
+./build-bench/bench/aura_bench --list                 # what is measured
+./build-bench/bench/aura_bench --iterations 400 --json bench.json
+python3 tools/bench_to_markdown.py bench.json --budgets
+```
+
+Build them **Release**: an `-O0` benchmark measures the build, not the code (the
+target forces `-O2` itself, for exactly that reason). Results and the published
+table live in `PERFORMANCE.md`.
+
 ## Configuration problems and their answers
 
 * **`CMake Generate step failed. Build files cannot be regenerated correctly.`**

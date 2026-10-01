@@ -104,7 +104,7 @@ echo "win_crosscheck: compiler $($CXX --version | head -n1)"
 # ---------------------------------------------------------------------------
 # 1. every translation unit (src/, app/ once it exists)
 # ---------------------------------------------------------------------------
-mapfile -t SOURCES < <(cd "$ROOT" && find src app -name '*.cpp' 2>/dev/null | sort)
+mapfile -t SOURCES < <(cd "$ROOT" && find src app bench -name '*.cpp' 2>/dev/null | sort)
 if [ "${#SOURCES[@]}" -eq 0 ]; then
     echo "win_crosscheck: no sources found - is this an AURA checkout?" >&2
     exit 2

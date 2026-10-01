@@ -144,6 +144,7 @@ setup work is done.
 | `tools/rt_audit.py` | RT-safety findings with file:line and why |
 | `tools/include_audit.py` | files that use a standard type without its header (MSVC will reject those) |
 | `tools/win_crosscheck.sh` | compiles the Windows-only code with MinGW-w64 before a Windows CI run is spent |
+| `bench/` + `tools/bench_to_markdown.py` | measures the DSP/session cost and publishes it as the Markdown in `PERFORMANCE.md` |
 | `tests/aura_tests "case" -s` | full expression output for a failing assertion |
 | `ctest --output-on-failure` | the same, for everything |
 | `AURA_ENABLE_ALLOC_TRACKING` | counts allocations; armed inside engine tests |
