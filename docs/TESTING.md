@@ -128,6 +128,22 @@ Three mechanisms:
    MSVC will accept the file — and MSVC rejected exactly that in the second CI run
    (`error C2039: 'mutex': is not a member of 'std'`). An escape carries a reason:
    `#include <vector>   // include-audit: allow <chrono> - arrives via Time.hpp`.
+4. **Dynamic, on the shipping compiler** — CI job *Windows Debug-ASan*
+   (`-DAURA_ENABLE_SANITIZERS=ON`, `windows-latest`). GCC/Clang are sanitized on
+   Linux, but the MSVC code paths — WASAPI, the COM plumbing, `/Zc:preprocessor`
+   behaviour — only ever execute on a Windows runner, so an address sanitizer that
+   is never pointed at them is not evidence about them. Three configuration facts
+   are load-bearing and each fails quietly if ignored: MSVC's ASan runtime is a
+   DLL, so the build switches to the **dynamic** CRT (`MultiThreadedDebugDLL`) and
+   drops `/RTC1`; the flags are **directory-scoped** rather than per-target,
+   because the linker refuses to mix instrumented and uninstrumented objects
+   (`error LNK2038: mismatch detected for 'annotate_string'`: value `0` doesn't
+   match value `1` — Catch2 lands in the same binary, so it is built under the same
+   rules); and the runtime DLL is not copied next to the test binary, so the job
+   puts the compiler's bin directory on `PATH` before running ctest.
+   `detect_leaks=0`: leak detection is the soak's job (measured over hours against a
+   real session), and a report per test process would bury the memory errors this
+   job exists to find.
 
 ### 6. Fuzzing
 
@@ -230,6 +246,7 @@ minutes of it in the Linux Debug job; the 8-hour campaign and its numbers are in
 | Anything touching the engine | `./tests/aura_tests "[engine]"` |
 | RT safety only | `ctest -R realtime_audit` |
 | Fuzzing, no Clang needed | `./tests/aura_tests "[fuzz]"` |
+| Address sanitizer locally | `cmake -S . -B build-asan -DAURA_ENABLE_SANITIZERS=ON -DAURA_BUILD_TESTS=ON && ctest --test-dir build-asan` |
 | Untrusted-input parsing under a real fuzzer | CI job *Fuzzing*, or the local campaign above |
 | Investigate a failure | `./tests/aura_tests "case name" -s` |
 
@@ -256,7 +273,7 @@ minutes of it in the Linux Debug job; the 8-hour campaign and its numbers are in
 | Stress: 500+ clips, an 8-hour recording in one take | M5 (clips scale is benchmarked; the single-take length is measured in `PERFORMANCE.md`) |
 | Fuzzing | **done** — 3 libFuzzer targets in CI + portable `[fuzz]` tests |
 | Memory growth over hours | **done** — `bench/aura_soak`, 2 minutes in CI, 8 hours on a workstation |
-| MSVC-sanitizer run in CI | M5 |
+| MSVC-sanitizer run in CI | **done** — job *Windows Debug-ASan*; ASan on MSVC is x64-only, needs the VC++ runtime redistributable, and has no leak detector (the soak covers growth) |
 | GUI/interaction tests (they do not exist because the shell does not exist) | M9 |
 | Real audio hardware in CI (no sound card on runners) | never — mitigated by the mock device and by manual device-matrix testing |
 | Accessibility automation (contrast, focus order, screen-reader smoke test) | M10, tracked in `research/ACCESSIBILITY_LOCALIZATION_RESEARCH.md` |

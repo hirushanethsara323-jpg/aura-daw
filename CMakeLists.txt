@@ -79,10 +79,16 @@ if(MSVC)
     # Spell it out for configure-time validation: CMake accepts exactly
     # MultiThreaded[Debug][DLL], so "DLL" trails the optional "Debug".
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-    target_compile_options(aura_project_options INTERFACE /fsanitize=address /Zi)
-    target_link_options(aura_project_options INTERFACE
-      /fsanitize=address /INCREMENTAL:NO)
-    message(STATUS "AURA: MSVC address sanitizer enabled (dynamic CRT, /INCREMENTAL:NO)")
+    # Directory-scoped on purpose, not on the interface target: MSVC's linker treats
+    # instrumented and uninstrumented objects as incompatible (LNK2038 on
+    # annotate_string/annotate_vector/annotate_optional), so the third-party code that
+    # ends up in the same binary - Catch2, fetched into tests/ - has to be built by the
+    # same rules. These options apply to every target created from here on, including
+    # the ones FetchContent adds later; GCC/Clang are happy either way, which is why the
+    # Linux sanitizer job can stay on the per-target flags.
+    add_compile_options(/fsanitize=address /Zi)
+    add_link_options(/fsanitize=address /INCREMENTAL:NO)
+    message(STATUS "AURA: MSVC address sanitizer enabled (whole build, dynamic CRT, /INCREMENTAL:NO)")
   endif()
 else()
   # The list mirrors the MSVC /W4 set: -Wunused-parameter stays ON because MSVC
