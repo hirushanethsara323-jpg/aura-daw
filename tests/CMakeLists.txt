@@ -87,6 +87,7 @@ add_executable(aura_tests
   timeline/TimelineTests.cpp
   plugin/PluginTests.cpp
   plugin/ChildProcessTests.cpp
+  plugin/SandboxTransportTests.cpp
 )
 target_link_libraries(aura_tests PRIVATE Aura::Engine Aura::Dsp Aura::Core aura_test_support)
 
@@ -168,7 +169,10 @@ endif()
 # The portable fuzz smoke test reuses the seeds and the temporary-file helper from
 # fuzz/FuzzSupport.hpp so the deterministic test and the libFuzzer targets start
 # from the same inputs (a bug found by one reproduces in the other).
-target_include_directories(aura_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src/plugin)
+target_include_directories(aura_tests PRIVATE
+  ${CMAKE_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/src/plugin
+  ${CMAKE_SOURCE_DIR}/src/plugin/sandbox)
 if(AURA_ENABLE_VST3)
   # ChildProcessTests drives the real scanner helper, which is a separate binary.
   target_include_directories(aura_scan_host PRIVATE ${CMAKE_SOURCE_DIR}/src/plugin)

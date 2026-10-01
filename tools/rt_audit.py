@@ -70,6 +70,10 @@ RT_SCOPE_GLOBS = [
     "src/transport/Transport.cpp",
     "src/audioio/WasapiDevice.cpp",
     "src/audioio/AsioDevice.cpp",
+    # The sandbox transport runs on the audio thread: it copies a block into shared
+    # memory and copies the helper's block back, per block, forever.
+    "src/plugin/sandbox/*.hpp",
+    "src/plugin/sandbox/*.cpp",
 ]
 
 # Function names (matched on the identifier before the opening parenthesis) that
@@ -83,6 +87,10 @@ RT_FUNCTION_PATTERNS = [
     r"^noteOn$", r"^noteOff$", r"^snapTo$", r"^applyMixerStateToGraph$",
     r"^drain$", r"^renderClips$", r"^renderInstruments$", r"^renderRecording$",
     r"^callback$", r"^onAudio.*",
+    # Sandbox transport (M7). Named narrowly on purpose: "^publish.*$" would sweep up
+    # the graph's plan publication, which is a control-thread operation that allocates.
+    r"^publishAudio$", r"^publishResult$", r"^publishFailure$", r"^acquireBlock$",
+    r"^tryPush$", r"^tryPop$",
 ]
 
 # Functions that look like they are in scope but are documented control-thread
