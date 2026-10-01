@@ -238,6 +238,17 @@ if(AURA_ENABLE_VST3)
   set(SMTG_ENABLE_VSTGUI_SUPPORT OFF CACHE BOOL "" FORCE)
   set(SMTG_ENABLE_VST3_PLUGIN_EXAMPLES OFF CACHE BOOL "" FORCE)
   set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES OFF CACHE BOOL "" FORCE)
+  # The SDK builds its libraries against the *dynamic* CRT (/MD[d]) while AURA ships
+  # the static one, and MSVC refuses to link the two in one binary: LNK2038 in every
+  # SDK object, then a wall of LNK2005/LNK2019 for the CRT symbols it cannot resolve.
+  # Since the SDK's toolset module reads this option to choose /MT[d] or /MD[d], the
+  # fix is to make it agree with how AURA builds - static normally, dynamic when the
+  # sanitizer forces it (MSVC's ASan runtime exists only as a DLL).
+  if(AURA_ENABLE_SANITIZERS)
+    set(SMTG_USE_STATIC_CRT OFF CACHE BOOL "" FORCE)
+  else()
+    set(SMTG_USE_STATIC_CRT ON CACHE BOOL "" FORCE)
+  endif()
   # The pin is one variable so the status line, the docs and the fetch cannot drift
   # apart. VST 3.8.1 build 84 is MIT-licensed (VST 3.8 relicensed the SDK) and is
   # the version the adapter in src/plugin/vst3 is written against.
