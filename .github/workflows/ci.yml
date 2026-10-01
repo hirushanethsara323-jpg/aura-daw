@@ -105,9 +105,9 @@ jobs:
   # takes. The last step scans that bundle with the helper binary and checks the
   # JSON, which is the half of the milestone that runs in a separate process.
   #
-  # Windows is the platform that ships, and a Windows row belongs here; it is
-  # waiting on the fixture's Windows bundle layout (Contents/x86_64-win) rather than
-  # on the adapter, which is platform-neutral. Tracked in docs/ROADMAP.md.
+  # The same thing on Windows lives in the `windows` job as the "Debug-VST3" row:
+  # the fixture is assembled in the Windows bundle layout now, so the product
+  # platform hosts plug-ins in CI too.
   vst3:
     name: Linux VST 3 hosting
     runs-on: ubuntu-latest
@@ -278,6 +278,14 @@ jobs:
             build_type: Debug
             extra: "-DAURA_ENABLE_SANITIZERS=ON"
             asan: "ON"
+          # VST 3 on the platform that ships (M6). The Linux row proves the adapter
+          # against the format; this one proves the same code compiles under MSVC and
+          # that a real Windows bundle (Contents/x86_64-win/<name>.vst3) loads,
+          # processes and restores state. It is its own row so a failure here reads as
+          # "the plug-in host broke", not "the build broke".
+          - name: Debug-VST3
+            build_type: Debug
+            extra: "-DAURA_ENABLE_VST3=ON"
     steps:
       - uses: actions/checkout@v4
 

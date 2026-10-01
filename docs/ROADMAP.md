@@ -12,7 +12,7 @@ honest answer to "where is it?".
 | **M3** | Graph and streams | `GraphNode`/`GraphPlan`/`GraphBuilder` (Kahn ordering, cycle reporting), fan-in, sends, plan publication with a grace window, memory and disk streams | graph tests + streaming regression green | ✅ **done** |
 | **M4** | Audio engine | `IAudioDevice`, WASAPI shared/exclusive, ASIO (opt-in), mock device, transport, clip/instrument rendering, recording engine, mixer, offline renderer + stems | engine tests green incl. allocation regression and latency accounting | ✅ **done** |
 | **M5** | Performance & hardening | `bench/` suite, session-scale benchmark, sanitizer runs (GCC/Clang **and** MSVC ASan), fuzzing the manifest and WAV parsers, memory-growth soak, delay compensation for dry paths, SIMD decision | budgets in `PERFORMANCE.md` met on the reference profile; no ASan/UBSan findings | 🔨 **one item left** — every gate is green: benchmarks, GCC/Clang sanitizers, the MSVC ASan row (*Windows Debug-ASan*), the fuzz campaign and the soak harness. The outstanding item is the 8-hour soak campaign, which `PERFORMANCE.md` marks as a plan rather than a measurement |
-| **M6** | Plug-in hosting | VST3 adapter (`AURA_ENABLE_VST3`), out-of-process scanner with timeouts and blacklist, parameter and latency discovery, generic editor fallback | a real VST3 loads, processes and restores state; a crashed scanner does not take the host down | 🔨 **acceptance verified, packaging left** — the adapter loads a real bundle built from this repository, processes through the engine's own buffers, converts parameters through the plug-in's ranges, reports latency (and re-reads it on `kLatencyChanged` and after a state restore) and round-trips state; the scanner runs the bundle in `aura_scan_host`, times it out and quarantines it with a reason. `build-vst3` (VST3 ON): 143/143 tests. Left: a CI job that builds the VST3 configuration (today CI builds the default, VST3-off one), the fixture's Windows/macOS bundle layout, and the editor *window* (the shell is M9/M10) |
+| **M6** | Plug-in hosting | VST3 adapter (`AURA_ENABLE_VST3`), out-of-process scanner with timeouts and blacklist, parameter and latency discovery, generic editor fallback | a real VST3 loads, processes and restores state; a crashed scanner does not take the host down | 🔨 **acceptance verified, packaging left** — the adapter loads a real bundle built from this repository, processes through the engine's own buffers, converts parameters through the plug-in's ranges, reports latency (and re-reads it on `kLatencyChanged` and after a state restore) and round-trips state; the scanner runs the bundle in `aura_scan_host`, times it out and quarantines it with a reason. `build-vst3` (VST3 ON): 143/143 tests. Left: the editor *window* (the shell is M9/M10) and the macOS fixture layout |
 | **M7** | Plug-in sandbox + CLAP | out-of-process audio host, CLAP adapter, latency re-reporting through the graph | a plug-in crash is survivable; CLAP plug-ins process | ⏳ |
 | **M8** | ASIO + device hardening | ASIO backend (GPLv3 SDK path), device matrix testing, sample-rate-change recovery, hot-plug UX | ASIO device at ≤ 64-frame buffers without xruns on the reference machine | ⏳ |
 | **M9** | Desktop shell | Win32 + Direct2D window, widget toolkit, theme, DPI awareness, transport + track headers + mixer, preferences, device panel | opens, plays, records, saves a project; idle CPU < 2 % | ⏳ |
@@ -27,13 +27,12 @@ honest answer to "where is it?".
    and fixed: `ProcessData` buffer ownership (a plug-in silently processed silence),
    the state-restore offset (every reload would have lost plug-in state) and latency
    not being re-read after a restart notification.
-2. **CI has to build it.** Every CI job currently configures the default VST3-off
-   build, so the flagship feature of this milestone is verified only on a developer
-   machine. Add a `AURA_ENABLE_VST3=ON` row (Linux first: it fetches the pinned SDK,
-   builds and runs the whole suite).
-3. **Windows is the product platform.** The adapter is platform-neutral, but the test
-   fixture's bundle layout exists for Linux only, and the child process has no job
-   object yet - both are M6 work, not "later".
+2. ~~**CI has to build it.**~~ **done** - `Linux VST 3 hosting` and the Windows
+   `Debug-VST3` row.
+3. **Windows is the product platform.** CI now builds and runs the adapter there
+   (`Debug-VST3`) against a real Windows bundle. Still open: the child process has no
+   job object, so a plug-in that spawns its own children is not cleaned up with the
+   scanner.
 4. **Sidechain and aux buses are wired to silence**, not routed: the graph needs a
    sidechain send before a compressor's detector means anything (M7/M8).
 5. **Sample-accurate parameter changes.** Block-aligned today; the format supports
