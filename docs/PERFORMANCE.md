@@ -206,6 +206,7 @@ quietly.
 | ASAN build | 9 s | 256 | 4 | 13 281 | 0.02 h | 56 → 56 MB | +0.00 MB/hour | **PASS** (no ASAN/UBSAN finding) |
 | Rehabilitation run, 2026-10-01 (`--record --tracks 12`) | 1 200 s | 256 | 12 | 95 837 769 | 5.9 days | 31 → 31 MB (min 30, max 31, final 31) | +0.00 MB/hour | **PASS** |
 | Acceptance-flag run, 2026-10-01 (`--record --tracks 16 --rebuild-every 120`) | 2 280 s | 256 | 16 | 157 369 420 | 9.7 days | 37 → 37 MB (min 36, max 37, final 37) | +0.00 MB/hour | **PASS, interrupted at 38 of 480 minutes** (`"complete": false`) — flagged, counted, and 114 takes plus 1.3 M graph rebuilds into the run |
+| **Acceptance-flag run, 2026-10-01, complete** | 3 600 s | 256 | 16 | 231 524 947 | 14.3 days | 37 → 37 MB (min 36, max 37, final 37) | **+0.00 MB/hour** | **PASS** (`"complete": true`) — 180 takes written and deleted, 1 929 374 graph rebuilds, per-take size guard never hit |
 | 8-hour campaign | automated by `.github/workflows/soak.yml` | 256 | 16 | — | — | — | — | the longest run a hosted runner allows is 5 hours (6-hour job cap); the 8-hour figure is that same command, run longer |
 
 The first two rows are the numbers the CI gate and a one-minute local run produce;
@@ -218,6 +219,13 @@ memory moved by one megabyte across the whole run — the same megabyte the firs
 saw. 95.8 M blocks is about six days of audio, which is the useful property of this
 harness: a five-year-old laptop can put a multi-day session through the engine
 faster than a coffee break.
+
+The complete hour above is the run that the interrupted one became: the same flags, the
+same 16-track session with recording on, restarted on a machine that stayed up. 231.5 M
+blocks is 14.3 days of audio through the real engine - clips streamed, EQ and compressor
+on every track, a reverb on an aux bus, 180 takes opened, written and closed, and the
+graph rebuilt 1.9 M times - with resident memory starting and ending at 37 MB and never
+leaving 36-37 MB. That is the criterion M5 asked for, measured rather than extrapolated.
 
 The long campaign is the M5 acceptance run, and it is now **automated rather than
 promised** (`.github/workflows/soak.yml`, monthly and on demand, Windows, the same
