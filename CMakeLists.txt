@@ -76,7 +76,9 @@ if(MSVC)
     # exist in the dynamic CRT, so the static CRT has to give way for this
     # configuration. Everything else about the build stays identical, which is what
     # makes the run worth doing: it exercises the same code the Release build ships.
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL$<$<CONFIG:Debug>:Debug>")
+    # Spell it out for configure-time validation: CMake accepts exactly
+    # MultiThreaded[Debug][DLL], so "DLL" trails the optional "Debug".
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
     target_compile_options(aura_project_options INTERFACE /fsanitize=address /Zi)
     target_link_options(aura_project_options INTERFACE
       /fsanitize=address /INCREMENTAL:NO)

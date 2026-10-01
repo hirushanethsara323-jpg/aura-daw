@@ -245,6 +245,22 @@ jobs:
             -DAURA_WARNINGS_AS_ERRORS=ON \
             $extra
 
+      - name: Put the MSVC sanitizer runtime on PATH
+        # MSVC's ASan runtime is a DLL that lives beside the compiler, not beside the
+        # test binaries, and nothing copies it there for you: without this the test
+        # step would fail to start the process at all, which looks like a broken build
+        # rather than a missing deployment step.
+        if: matrix.asan == 'ON'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          $dll = Get-ChildItem -Path (Join-Path $vs 'VC\Tools\MSVC') -Recurse `
+                   -Filter clang_rt.asan_dynamic-x86_64.dll | Select-Object -First 1
+          if (-not $dll) { throw "ASan runtime not found under $vs" }
+          Write-Host "Sanitizer runtime: $($dll.FullName)"
+          $dll.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append
+
       - name: Build
         run: cmake --build build --config ${{ matrix.build_type }} -j 2
 
