@@ -45,6 +45,36 @@ in a hurry:
 * No `using namespace` in headers; no C-style casts; no `malloc`/`free`;
   `std::string_view` for read-only parameters.
 
+## The warning contract
+
+Two compilers, one set of rules. A warning that Linux forgives but MSVC reports is
+a red CI job, so the flag sets are kept deliberately equal (ADR-0013):
+
+| what | MSVC | GCC / Clang |
+|------|------|-------------|
+| base level | `/W4` | `-Wall -Wextra -Wpedantic` |
+| narrowing | C4244 / C4245 / C4267 | `-Wconversion -Wsign-conversion` |
+| shadowing | C4456–C4459 | `-Wshadow` |
+| unused parameters | C4100 | `-Wunused-parameter` |
+| as errors | `/WX` | `-Werror` (both only with `AURA_WARNINGS_AS_ERRORS=ON`) |
+
+* Check your work the way CI does:
+  `cmake -S . -B build-werror -DAURA_WARNINGS_AS_ERRORS=ON && cmake --build build-werror -j 2`.
+* **`-Wshadow` is why aliases may not repeat an enumerator name.** GCC 13 (CI)
+  reports an enumerator that shares a name with a namespace-scope declaration;
+  `json::Type::Array` next to `using Array = …` was exactly that. GCC 14 (many dev
+  machines) accepts it — do not trust a green local build for that class of change.
+* **Unused parameters stay an error**, because MSVC reports C4100 at `/W4` and an
+  interface-imposed parameter cannot be dropped from the signature. Leave the
+  parameter unnamed in the *definition* (`int /*numChannels*/`) and say why in a
+  comment; `[[maybe_unused]]` is not needed.
+* **Suppressions are rare, scoped and explained.** The tree's only one is
+  `#pragma warning(disable : 4324)` around `SpscQueue` and `AudioRingBuffer`, where
+  padding *is* the feature (one cache line per index). Wrap it in
+  `pragma warning(push/pop)`, never add a global `/wd` or `-Wno-` flag, and record
+  the reason in ADR-0013.
+* `sizeof`-based `if` in a template is C4127 on MSVC — write `if constexpr`.
+
 ## Real-time rules (non-negotiable on the audio path)
 
 No allocation, no locks, no file or console I/O, no exceptions, no unbounded loops,

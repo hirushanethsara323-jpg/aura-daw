@@ -208,7 +208,14 @@ TEST_CASE("Autosave writes on modification and only reports recovery when needed
 
 TEST_CASE("User-facing messages are localized through the translator", "[project][localization]") {
     auto& translator = loc::Translator::instance();
-    translator.setLanguage("en");
+    // The unit-test build registers no catalogue, so setLanguage() may report
+    // NotFound and stay on the fallback - that is the documented behaviour. The
+    // invariant this pins is that the translator is always left in a usable state
+    // (no call site has to check whether a language is active).
+    const Status status = translator.setLanguage("en");
+    REQUIRE_FALSE(translator.language().empty());
+    if (!status)
+        REQUIRE(translator.language() == "en");
     const AuraError error = makeError(ErrorCode::DiskFull, "disk full");
     // The key exists for every code, so the UI can always show a translated
     // message rather than a raw enum name.

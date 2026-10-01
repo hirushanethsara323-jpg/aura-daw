@@ -24,6 +24,15 @@ namespace aura {
 
 /// Multi-channel float ring buffer, planar-interleaved-block layout:
 /// samples are stored interleaved as [frame][channel].
+#if defined(_MSC_VER)
+// C4324 ("structure was padded due to alignment specifier", /W4) is intentional
+// here: writePos_ and readPos_ each own a cache line so the producer and the
+// consumer never share one. Scoped to this class so the rest of the file - and of
+// the project - keeps the warning.
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
+
 class AudioRingBuffer {
 public:
     AudioRingBuffer() = default;
@@ -124,5 +133,9 @@ private:
     alignas(64) std::atomic<std::size_t> writePos_{0};
     alignas(64) std::atomic<std::size_t> readPos_{0};
 };
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 } // namespace aura

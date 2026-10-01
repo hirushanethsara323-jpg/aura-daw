@@ -219,8 +219,13 @@ void Mixer::prepare(double sampleRate, int maxBlockSize, int numChannels) {
         if (insert.processor == &masterLimiter_)
             limiterInserted = true;
     }
-    if (!limiterInserted)
-        master_->addInsert({"Master Limiter", &masterLimiter_, false, "", 1.0f});
+    if (!limiterInserted) {
+        // The safety limiter is the last line of defence against a clipped master,
+        // so if the chain is somehow already full the failure must be visible
+        // rather than silently dropped.
+        if (!master_->addInsert({"Master Limiter", &masterLimiter_, false, "", 1.0f}))
+            AURA_LOG_ERROR(kCategory, "Master insert chain is full; safety limiter not inserted");
+    }
 }
 
 void Mixer::reset() noexcept {

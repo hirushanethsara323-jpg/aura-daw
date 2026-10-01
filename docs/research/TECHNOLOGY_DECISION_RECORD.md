@@ -149,6 +149,35 @@ live in the per-topic documents in this folder; this file is the index of record
   versioned separately from the application, and opening a newer project in an
   older build is refused with a clear message rather than half-loaded.
 
+## ADR-0013 — One warning contract for both toolchains
+
+* **Accepted.** The MSVC and GCC flag sets are kept aligned, warnings are errors in
+  CI (`/WX`, `-Werror`), and the only suppression in the tree is a scoped
+  `#pragma warning(disable : 4324)` around the two cache-line-padded lock-free
+  classes (`SpscQueue`, `AudioRingBuffer`).
+* **Why:** the first CI run was green on the "Repo hygiene" job and red on every
+  build job — with failures that could not appear locally: GCC 13's `-Wshadow`
+  rejecting `using Array = …` next to a `Type::Array` enumerator (GCC 14 accepts
+  it), MSVC C4324 padding, and `GetCurrentThreadId` without `<windows.h>`. Two
+  hours of CI were spent proving that "builds on my machine" is not evidence.
+* **Research:** Microsoft's own pages define the levels we now design for — C4324
+  is level 4 and fires on any `alignas`/`__declspec(align)` that pads a class
+  ([C4324](https://learn.microsoft.com/en-us/cpp/error-messages/compiler-warnings/compiler-warning-level-4-c4324)),
+  C4127 does *not* fire for trivial literals such as `while (false)` since VS2015
+  update 3, which keeps the `do { … } while (false)` macro idiom safe
+  ([C4127](https://learn.microsoft.com/en-us/cpp/error-messages/compiler-warnings/compiler-warning-level-4-c4127)),
+  and C4100 (unreferenced formal parameter) is reported at `/W4`, so
+  `-Wunused-parameter` stays **on** for GCC — a warning Linux forgives is a build
+  break on Windows.
+* **Rejected:** a global `/wd4324` or `/wd4100` in `CMakeLists.txt` (hides the next
+  real instance in unrelated code), lowering `/W4`, and turning warnings-as-errors
+  off in CI. Also rejected: naming locals after members and silencing `-Wshadow`
+  instead of renaming the local.
+* **Consequences:** a new suppression must be a scoped `pragma push/pop` with a
+  comment saying why the warning is expected, plus an entry here. Both toolchains
+  are in the matrix, so an asymmetry is caught by the first push rather than by a
+  user. `docs/DEVELOPMENT.md` documents the contract for contributors.
+
 ---
 
 ## Open decisions

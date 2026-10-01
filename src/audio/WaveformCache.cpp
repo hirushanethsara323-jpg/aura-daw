@@ -62,8 +62,12 @@ Status WaveformCache::buildFor(const std::string& audioPath, std::uint32_t sampl
     return success();
 }
 
-void WaveformCache::buildThread(std::string audioPath, std::uint32_t sampleRate,
-                                std::int64_t totalFrames) {
+void WaveformCache::buildThread(std::string audioPath, std::uint32_t /*sampleRate*/,
+                                std::int64_t /*totalFrames*/) {
+    // sampleRate/totalFrames come from the media pool (which knows them without
+    // opening the file) but the file header is authoritative here, so the peaks
+    // always match the audio that will actually play. The parameters stay in the
+    // signature for the partial-rebuild path planned in docs/ROADMAP.md.
     media::AudioFileReader reader;
     auto info = reader.open(audioPath);
     if (!info) {
@@ -104,7 +108,8 @@ void WaveformCache::buildThread(std::string audioPath, std::uint32_t sampleRate,
         const float* data = interleaved.data();
         for (int i = 0; i < read; ++i) {
             for (int channel = 0; channel < channels; ++channel) {
-                const float value = data[static_cast<std::size_t>(i) * channels + static_cast<std::size_t>(channel)];
+                const float value = data[static_cast<std::size_t>(i) * static_cast<std::size_t>(channels) +
+                                         static_cast<std::size_t>(channel)];
                 bucketMin = std::min(bucketMin, value);
                 bucketMax = std::max(bucketMax, value);
                 overallPeak = std::max(overallPeak, std::abs(value));

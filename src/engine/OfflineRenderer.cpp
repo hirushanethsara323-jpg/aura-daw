@@ -159,11 +159,12 @@ AuraResult<RenderResult> OfflineRenderer::renderRange(const std::string& outputP
         renderBlock(outputs, frames, startPosition + rendered);
 
         for (int i = 0; i < frames; ++i) {
-            peak = std::max(peak, std::max(std::abs(static_cast<double>(left[i])),
-                                           std::abs(static_cast<double>(right[i]))));
-            interleaved[static_cast<std::size_t>(i) * 2] = left[static_cast<std::size_t>(i)];
-            interleaved[static_cast<std::size_t>(i) * 2 + 1] = right[static_cast<std::size_t>(i)];
-            prepareForExport(&interleaved[static_cast<std::size_t>(i) * 2], 2,
+            const std::size_t index = static_cast<std::size_t>(i);
+            peak = std::max(peak, std::max(std::abs(static_cast<double>(left[index])),
+                                           std::abs(static_cast<double>(right[index]))));
+            interleaved[index * 2] = left[index];
+            interleaved[index * 2 + 1] = right[index];
+            prepareForExport(&interleaved[index * 2], 2,
                              settings.dither, dither);
         }
 

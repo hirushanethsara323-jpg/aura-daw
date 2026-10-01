@@ -71,8 +71,13 @@ public:
 };
 
 /// One biquad section with up to N channels of independent state.
+///
+/// MaxChannels stays an `int` (the engine counts channels as int everywhere); the
+/// array extent below is the one place that needs a size_t, hence the explicit
+/// conversion - it keeps -Wsign-conversion quiet without weakening the flags.
 template <int MaxChannels = 2>
 class Biquad {
+    static_assert(MaxChannels > 0, "a biquad needs at least one channel of state");
 public:
     void reset() noexcept {
         for (auto& channel : state_)
@@ -132,7 +137,7 @@ private:
     };
 
     BiquadCoefficients coefficients_{};
-    std::array<State, MaxChannels> state_{};
+    std::array<State, static_cast<std::size_t>(MaxChannels)> state_{};
 };
 
 /// First-order one-pole low-pass/high-pass used for DC blockers and tilt EQ.

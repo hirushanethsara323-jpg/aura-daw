@@ -73,10 +73,6 @@ constexpr std::uint8_t kGuidPcmPrefix[16] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
 constexpr std::uint8_t kGuidFloatPrefix[16] = {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
                                                0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71};
 
-bool matches(const char id[4], const char* expected) noexcept {
-    return std::memcmp(id, expected, 4) == 0;
-}
-
 bool chunkEquals(const ChunkHeader& chunk, const char* id) noexcept {
     return std::memcmp(chunk.id, id, 4) == 0;
 }
@@ -340,7 +336,8 @@ int AudioFileReader::readPlanar(std::int64_t startFrame, float* const* destinati
 
     const int channels = info_.numChannels;
     const int bytesPerSample = info_.bitsPerSample / 8;
-    const std::size_t interleavedFloats = static_cast<std::size_t>(frames) * channels;
+    const std::size_t interleavedFloats =
+        static_cast<std::size_t>(frames) * static_cast<std::size_t>(channels);
     if (impl_->frameBuffer.size() < interleavedFloats * static_cast<std::size_t>(bytesPerSample))
         impl_->frameBuffer.resize(interleavedFloats * static_cast<std::size_t>(bytesPerSample));
 
@@ -357,7 +354,8 @@ int AudioFileReader::readPlanar(std::int64_t startFrame, float* const* destinati
     const std::uint8_t* source = impl_->frameBuffer.data();
     for (int i = 0; i < framesRead; ++i) {
         for (int channel = 0; channel < channels; ++channel) {
-            const std::size_t index = static_cast<std::size_t>(i) * channels + static_cast<std::size_t>(channel);
+            const std::size_t index = static_cast<std::size_t>(i) * static_cast<std::size_t>(channels) +
+                                      static_cast<std::size_t>(channel);
             const std::uint8_t* sample = source + index * static_cast<std::size_t>(bytesPerSample);
             float value = 0.0f;
             switch (info_.format) {
@@ -408,7 +406,8 @@ int AudioFileReader::readInterleaved(std::int64_t startFrame, float* destination
     const int framesRead = readPlanar(startFrame, pointers.data(), frames);
     for (int i = 0; i < framesRead; ++i) {
         for (int channel = 0; channel < channels; ++channel) {
-            destination[static_cast<std::size_t>(i) * channels + static_cast<std::size_t>(channel)] =
+            destination[static_cast<std::size_t>(i) * static_cast<std::size_t>(channels) +
+                        static_cast<std::size_t>(channel)] =
                 planar[static_cast<std::size_t>(channel)][static_cast<std::size_t>(i)];
         }
     }

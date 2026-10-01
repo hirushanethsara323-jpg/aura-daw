@@ -19,9 +19,11 @@ void Delay::prepare(double sampleRate, int maxBlockSize, int numChannels) {
     bufferRight_.assign(capacity_, 0.0f);
     writeIndex_ = 0;
 
-    // 30 ms glide keeps tempo changes musical instead of tape-warping.
-    delaySmootherLeft_.reset(sampleRate, sampleRate_ * 0.375, 0.03f);
-    delaySmootherRight_.reset(sampleRate, sampleRate_ * 0.375, 0.03f);
+    // 30 ms glide keeps tempo changes musical instead of tape-warping. The delay
+    // length is a sample count, so it is computed in double and narrowed once.
+    const float defaultDelaySamples = static_cast<float>(sampleRate_ * 0.375);
+    delaySmootherLeft_.reset(sampleRate, defaultDelaySamples, 0.03f);
+    delaySmootherRight_.reset(sampleRate, defaultDelaySamples, 0.03f);
     feedbackSmoother_.reset(sampleRate, settings_.feedback, 0.02f);
     mixSmoother_.reset(sampleRate, settings_.mix, 0.02f);
 

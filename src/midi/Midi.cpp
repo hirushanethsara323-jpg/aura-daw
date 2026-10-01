@@ -139,6 +139,16 @@ bool quantiseNotes(std::vector<Note>& notes, const QuantiseSettings& settings) {
     const float strength = math::clamp01(settings.strength);
     bool changed = false;
 
+    // One helper for both ends of the note so the two quantise paths cannot drift
+    // apart, and so the long long -> double narrowing std::llround() forces is
+    // explicit rather than an implicit -Wconversion hit.
+    const auto quantiseTicks = [grid](std::int64_t ticks) noexcept -> std::int64_t {
+        const double gridValue = static_cast<double>(grid);
+        // Round to whole grid units first, then scale back to ticks.
+        const double units = static_cast<double>(std::llround(static_cast<double>(ticks) / gridValue));
+        return static_cast<std::int64_t>(units * gridValue);
+    };
+
     for (auto& note : notes) {
         const auto positions = static_cast<std::int64_t>(std::llround(static_cast<double>(note.startTicks) / static_cast<double>(grid)));
         const double swung =
@@ -153,8 +163,7 @@ bool quantiseNotes(std::vector<Note>& notes, const QuantiseSettings& settings) {
             changed = true;
         }
         if (settings.quantiseEnds) {
-            const auto endQuantised = static_cast<std::int64_t>(
-                std::llround(static_cast<double>(note.endTicks()) / static_cast<double>(grid)) * static_cast<double>(grid));
+            const auto endQuantised = quantiseTicks(note.endTicks());
             const auto newEnd = static_cast<std::int64_t>(
                 std::llround(static_cast<double>(note.endTicks()) +
                              static_cast<double>(endQuantised - note.endTicks()) * static_cast<double>(strength)));

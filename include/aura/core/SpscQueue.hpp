@@ -19,6 +19,15 @@
 
 namespace aura {
 
+#if defined(_MSC_VER)
+// C4324 ("structure was padded due to alignment specifier") is the whole point of
+// this class: head and tail each get their own cache line so the producer and the
+// consumer never write to the same one. MSVC warns at /W4 and the project builds
+// with /WX, so the warning is silenced here, where it is understood - not globally.
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
+
 template <typename T, std::size_t Capacity>
 class SpscQueue {
     static_assert(Capacity >= 2, "Capacity must be at least 2");
@@ -66,5 +75,9 @@ private:
     alignas(64) std::atomic<std::size_t> head_{0};
     alignas(64) std::atomic<std::size_t> tail_{0};
 };
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 } // namespace aura

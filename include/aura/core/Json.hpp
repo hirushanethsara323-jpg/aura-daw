@@ -26,8 +26,13 @@
 namespace aura::json {
 
 class Value;
-using Object = std::vector<std::pair<std::string, Value>>;
-using Array = std::vector<Value>;
+/// Container aliases. They are deliberately *not* called `Array`/`Object`: those
+/// are the `Type` enumerators below, and GCC 13's -Wshadow reports an enumerator
+/// that shares a name with a namespace-scope declaration (which the project
+/// builds with, warnings-as-errors). The Json prefix also reads better at a call
+/// site: `json::JsonArray` is unambiguously a container, not a type tag.
+using JsonObject = std::vector<std::pair<std::string, Value>>;
+using JsonArray = std::vector<Value>;
 
 enum class Type { Null, Bool, Number, String, Array, Object };
 
@@ -80,9 +85,9 @@ public:
     [[nodiscard]] Value& operator[](std::string_view key);
     [[nodiscard]] bool has(std::string_view key) const noexcept;
     [[nodiscard]] bool erase(std::string_view key);
-    [[nodiscard]] const Object& members() const noexcept { return object_; }
-    [[nodiscard]] const Array& elements() const noexcept { return array_; }
-    [[nodiscard]] Array& elements() noexcept { return array_; }
+    [[nodiscard]] const JsonObject& members() const noexcept { return object_; }
+    [[nodiscard]] const JsonArray& elements() const noexcept { return array_; }
+    [[nodiscard]] JsonArray& elements() noexcept { return array_; }
 
     void push(Value v);
     void set(std::string key, Value v);
@@ -115,8 +120,8 @@ private:
     bool bool_ = false;
     double number_ = 0.0;
     std::string string_;
-    Array array_;
-    Object object_; // insertion ordered, linear lookup (objects are small)
+    JsonArray array_;
+    JsonObject object_; // insertion ordered, linear lookup (objects are small)
 };
 
 /// Parses JSON text. On failure returns an AuraError with line/column info.

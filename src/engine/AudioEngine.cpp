@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 
 #include "aura/core/Log.hpp"
 #include "aura/core/Sort.hpp"
@@ -61,8 +62,13 @@ Status AudioEngine::initialise(IAudioDevice* device, const EngineSettings& setti
     // The device callback is the audio thread: mark it so RT assertions and the
     // allocation counter know what they are looking at.
     const Status started = device_->start(
-        [this](float* const* outputs, const float* const* inputs, int numChannels,
-               int numInputChannels, int numFrames) {
+        // The device reports its channel counts on every callback; the engine
+        // already knows them from prepare(), so they are deliberately unnamed
+        // here rather than carried around unused (MSVC /W4 C4100 and GCC
+        // -Wunused-parameter both reject unused names, which keeps the two
+        // compilers honest about what this callback actually consumes).
+        [this](float* const* outputs, const float* const* inputs, int /*numChannels*/,
+               int /*numInputChannels*/, int numFrames) {
             rt::enterRealtimeThread();
             rt::ScopedNoDenormals noDenormals;
             processBlock(outputs, inputs, numFrames);
@@ -213,7 +219,9 @@ Status AudioEngine::rebuildGraph() {
 }
 
 int AudioEngine::totalLatencySamples() const noexcept {
-    int total = device_ ? device_->latencySamples() : 0;
+    // Accumulated in 64-bit because the compensation figure is int64; narrowing
+    // happens once, saturated, at the end.
+    std::int64_t total = device_ ? device_->latencySamples() : 0;
     // Insert chains (the plan reports the longest path) plus the master strip,
     // which the engine runs after the graph and so is not part of the plan.
     if (activePlan_)
@@ -224,7 +232,10 @@ int AudioEngine::totalLatencySamples() const noexcept {
     // a no-op, so this is zero until M5 - reporting a number here that no delay
     // line backs would over-state the round trip.
     total += compensatedLatency_.load(std::memory_order_relaxed);
-    return total;
+    // The engine reports latency as int everywhere (device APIs and the graph
+    // plans); saturate instead of wrapping if a pathological chain ever exceeds
+    // INT_MAX samples of delay.
+    return static_cast<int>(std::clamp<std::int64_t>(total, 0, std::numeric_limits<int>::max()));
 }
 
 void AudioEngine::applyMixerStateToGraph() noexcept {

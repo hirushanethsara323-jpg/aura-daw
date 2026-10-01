@@ -65,9 +65,13 @@ if(MSVC)
   # depend on a specific VC++ redistributable being present.
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 else()
+  # The list mirrors the MSVC /W4 set: -Wunused-parameter stays ON because MSVC
+  # reports C4100 at /W4 (and /WX turns it into an error), so an unused parameter
+  # that GCC forgives would still break the Windows build. Keeping the two flag
+  # sets aligned means "green on Linux" really does imply "green on CI Windows".
   target_compile_options(aura_project_options INTERFACE
     -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion
-    -Wno-unused-parameter -Wno-missing-field-initializers)
+    -Wunused-parameter -Wno-missing-field-initializers)
   if(AURA_ENABLE_SANITIZERS)
     target_compile_options(aura_project_options INTERFACE
       -fsanitize=address,undefined -fno-omit-frame-pointer)

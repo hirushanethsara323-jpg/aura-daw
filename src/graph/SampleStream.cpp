@@ -172,9 +172,12 @@ int DiskStream::read(float* const* destinations, int frames) noexcept {
     }
 
     // Now read the requested frames (interleaved storage -> planar output).
-    const std::size_t maxFrames = frames < static_cast<int>(buffered - (position_ - ringStart))
-                                      ? static_cast<std::size_t>(frames)
-                                      : buffered - static_cast<std::size_t>(position_ - ringStart);
+    // Compare inside the size_t domain: `buffered - skipped` is a frame count and
+    // the cursor arithmetic is int64, so mixing the two would need a narrowing
+    // cast either way.
+    const std::size_t pending = buffered - static_cast<std::size_t>(position_ - ringStart);
+    const std::size_t requested = static_cast<std::size_t>(frames);
+    const std::size_t maxFrames = requested < pending ? requested : pending;
     if (maxFrames == 0) {
         underruns_.fetch_add(1, std::memory_order_relaxed);
         return 0;

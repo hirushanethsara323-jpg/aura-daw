@@ -17,6 +17,8 @@ include(FetchContent)
 
 option(AURA_FETCH_DEPS "Download pinned third-party test dependencies" ON)
 set(AURA_CATCH2_TAG v3.7.1)
+set(AURA_CATCH2_DIR "" CACHE PATH
+    "Local Catch2 v3 *source* checkout used when AURA_FETCH_DEPS=OFF")
 
 if(AURA_FETCH_DEPS)
   FetchContent_Declare(Catch2
@@ -25,6 +27,31 @@ if(AURA_FETCH_DEPS)
     GIT_SHALLOW TRUE)
   FetchContent_MakeAvailable(Catch2)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+elseif(AURA_CATCH2_DIR)
+  # A relative value is resolved against the repository root (so CI can pass the
+  # plain, shell-independent "../catch2" for a sibling checkout). Doing the
+  # resolution here - rather than with `cd ... && pwd` in the workflow - avoids the
+  # MSYS-vs-CMake path mismatch that Git Bash introduces on Windows runners, where
+  # a shell-computed path can arrive as /d/a/... and be read as a path on C:.
+  if(NOT IS_ABSOLUTE "${AURA_CATCH2_DIR}")
+    set(AURA_CATCH2_DIR "${CMAKE_SOURCE_DIR}/${AURA_CATCH2_DIR}")
+  endif()
+  get_filename_component(AURA_CATCH2_DIR "${AURA_CATCH2_DIR}" ABSOLUTE)
+  if(NOT EXISTS "${AURA_CATCH2_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR
+      "AURA_CATCH2_DIR does not look like a Catch2 checkout (no CMakeLists.txt): "
+      "${AURA_CATCH2_DIR}\n"
+      "Clone it with:\n"
+      "  git clone --branch v3.7.1 --depth 1 https://github.com/catchorg/Catch2.git ../catch2")
+  endif()
+  message(STATUS "Offline build: Catch2 source at ${AURA_CATCH2_DIR}")
+  # Offline / air-gapped build: docs/BUILDING.md tells the user to clone a pinned
+  # tag and point this variable at it. find_package() cannot consume a source
+  # tree (it wants catch2-config.cmake), which is why this branch builds Catch2 as
+  # a subproject instead - the mistakes this avoids are a configure failure that
+  # looks like a missing package on a machine that has the source right there.
+  add_subdirectory(${AURA_CATCH2_DIR} ${CMAKE_BINARY_DIR}/catch2 EXCLUDE_FROM_ALL)
+  list(APPEND CMAKE_MODULE_PATH ${AURA_CATCH2_DIR}/extras)
 else()
   find_package(Catch2 3 REQUIRED)
   list(APPEND CMAKE_MODULE_PATH ${Catch2_ROOT}/extras)

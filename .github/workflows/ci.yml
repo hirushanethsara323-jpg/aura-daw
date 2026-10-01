@@ -112,10 +112,12 @@ jobs:
             build_type: Release
             extra: ""
           # Proves that "optional" dependencies really are optional: no network
-          # fetch, no ASIO, no VST3, no JUCE.
+          # fetch, no ASIO, no VST3, no JUCE. The Catch2 source path is appended in
+          # the configure step - a relative "../catch2" that tests/CMakeLists.txt
+          # resolves against the repository root.
           - name: Release-no-deps
             build_type: Release
-            extra: "-DAURA_FETCH_DEPS=OFF -DAURA_CATCH2_DIR=${{ github.workspace }}/../catch2"
+            extra: "-DAURA_FETCH_DEPS=OFF"
     steps:
       - uses: actions/checkout@v4
 
@@ -134,11 +136,17 @@ jobs:
       - name: Configure
         shell: bash
         run: |
+          extra="${{ matrix.extra }}"
+          if [[ "$extra" == *"AURA_FETCH_DEPS=OFF"* ]]; then
+            # Relative to the repository root, so no shell path computation is
+            # involved (a Windows runner would otherwise hand CMake an MSYS path).
+            extra="$extra -DAURA_CATCH2_DIR=../catch2"
+          fi
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DAURA_BUILD_TESTS=ON \
             -DAURA_WARNINGS_AS_ERRORS=ON \
-            ${{ matrix.extra }}
+            $extra
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build_type }} -j 2

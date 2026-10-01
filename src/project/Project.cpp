@@ -574,14 +574,22 @@ AuraResult<std::unique_ptr<Project>> Project::deserializeDocument(const std::str
     project->tempoMap_.clear();
     project->tempoMap_.setDefaultTempo(tempo["defaultBpm"].asDouble(120.0));
     time::TimeSignature signature{4, 4};
-    time::timeSignatureFromString(tempo["defaultTimeSignature"].asString("4/4"), signature);
+    if (!time::timeSignatureFromString(tempo["defaultTimeSignature"].asString("4/4"), signature)) {
+        // Repair rather than refuse: the rest of the document is still valid and
+        // the default is documented in PROJECT_FORMAT.md. The user is told.
+        AURA_LOG_WARN(kCategory, "Unreadable default time signature in project.json; using 4/4");
+        signature = time::TimeSignature{4, 4};
+    }
     project->tempoMap_.setDefaultTimeSignature(signature);
     for (const auto& event : tempo["events"].elements()) {
         project->tempoMap_.addTempo(event["positionTicks"].asInt64(), event["bpm"].asDouble(120.0));
     }
     for (const auto& event : tempo["signatureEvents"].elements()) {
         time::TimeSignature eventSignature{4, 4};
-        time::timeSignatureFromString(event["signature"].asString("4/4"), eventSignature);
+        if (!time::timeSignatureFromString(event["signature"].asString("4/4"), eventSignature)) {
+            AURA_LOG_WARN(kCategory, "Dropped a time-signature event with an unreadable value");
+            continue;
+        }
         project->tempoMap_.addTimeSignature(event["positionTicks"].asInt64(), eventSignature);
     }
 
@@ -596,6 +604,7 @@ AuraResult<std::unique_ptr<Project>> Project::deserializeDocument(const std::str
     }
 
     // --- tracks --------------------------------------------------------------
+    int droppedInserts = 0;
     for (const auto& entry : root["tracks"].elements()) {
         const auto kind = static_cast<audio::TrackKind>(entry["kind"].asInt(0));
         const audio::TrackId id = static_cast<audio::TrackId>(entry["id"].asInt(0));
@@ -628,7 +637,11 @@ AuraResult<std::unique_ptr<Project>> Project::deserializeDocument(const std::str
                 insert.bypassed = slot["bypassed"].asBool(false);
                 insert.mix = slot["mix"].asFloat(1.0f);
                 insert.pluginId = slot["pluginId"].asString("");
-                track->addInsert(std::move(insert));
+                // false means the chain is already at kMaxInserts (addInsert logs
+                // the track and the limit itself); the rest of the project still
+                // loads, and the total is reported once below.
+                if (!track->addInsert(std::move(insert)))
+                    ++droppedInserts;
             }
             for (const auto& send : entry["sends"].elements()) {
                 audio::Send value;
@@ -643,6 +656,10 @@ AuraResult<std::unique_ptr<Project>> Project::deserializeDocument(const std::str
                 track->clips().push_back(static_cast<std::uint64_t>(clipId.asInt64()));
             (void)id;
         }
+    }
+    if (droppedInserts > 0) {
+        AURA_LOG_WARN(kCategory, "Dropped %d insert(s) while loading (limit is %zu per track)",
+                      droppedInserts, audio::kMaxInserts);
     }
     (void)project->mixer_->resolveSoloState();
 

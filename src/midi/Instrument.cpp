@@ -233,7 +233,9 @@ void PolySynth::noteOn(int note, int velocity) noexcept {
     voice.active = true;
     voice.held = true;
     voice.note = note;
-    voice.velocity = std::max(1, velocity) / 127.0f;
+    // MIDI velocity arrives as 1..127; a silent note-on is treated as 1 so the
+    // voice still sounds (matching hardware that clamps rather than drops).
+    voice.velocity = static_cast<float>(std::max(1, velocity)) / 127.0f;
     voice.age = ++voiceAgeCounter_;
     voice.filter.reset();
     voice.envelope.noteOn();

@@ -12,6 +12,10 @@
 #include <utility>
 
 #if defined(_WIN32)
+// GetCurrentThreadId lives in processthreadsapi.h, which <windows.h> pulls in.
+// (The project defines WIN32_LEAN_AND_MEAN, so it must be requested explicitly -
+// without it MSVC reports C3861 "identifier not found".)
+#include <windows.h>
 #include <process.h>
 #else
 #include <unistd.h>

@@ -195,12 +195,10 @@ time::SamplePos snap(time::SamplePos positionSamples, const SnapContext& context
 // ---------------------------------------------------------------------------
 // TimelineViewState
 // ---------------------------------------------------------------------------
-void TimelineViewState::setZoom(double samplesPerPixel) noexcept {
-    if (samplesPerPixel < kMinSamplesPerPixel)
-        samplesPerPixel = kMinSamplesPerPixel;
-    if (samplesPerPixel > kMaxSamplesPerPixel)
-        samplesPerPixel = kMaxSamplesPerPixel;
-    this->samplesPerPixel = samplesPerPixel;
+void TimelineViewState::setZoom(double value) noexcept {
+    // The parameter is not named after the member it assigns (-Wshadow would flag
+    // it, and `this->` at the call site would be the only way to tell them apart).
+    samplesPerPixel = math::clamp(value, kMinSamplesPerPixel, kMaxSamplesPerPixel);
 }
 
 void TimelineViewState::zoomIn(double factor) noexcept {

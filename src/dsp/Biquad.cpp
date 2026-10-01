@@ -9,23 +9,9 @@
 namespace aura::dsp {
 namespace {
 
-struct PoleCoefficients {
-    double a1 = 0.0;
-    double a2 = 0.0;
-};
-
-/// Common denominator term from the cookbook: alpha = sin(w0) / (2Q).
-PoleCoefficients computePoles(double w0, double sinW0, double cosW0, double alpha) noexcept {
-    (void)w0;
-    (void)sinW0;
-    (void)cosW0;
-    PoleCoefficients poles;
-    const double a0 = 1.0 + alpha;
-    poles.a1 = -2.0 * cosW0 / a0;
-    poles.a2 = (1.0 - alpha) / a0;
-    return poles;
-}
-
+/// Every design below shares the same normalisation: RBJ's cookbook gives the
+/// coefficients relative to a0, and the direct-form II transposed filter wants
+/// them already divided out.
 BiquadCoefficients normalize(double b0, double b1, double b2, double a0, double a1,
                             double a2) noexcept {
     BiquadCoefficients out;

@@ -59,6 +59,13 @@ cmake -S . -B build -DAURA_BUILD_TESTS=ON \
       -DAURA_FETCH_DEPS=OFF -DAURA_CATCH2_DIR=/opt/catch2
 ```
 
+`AURA_CATCH2_DIR` takes either an absolute path or one **relative to the repository
+root** — CI uses `../catch2` for a sibling checkout, which keeps the path identical
+on Linux and on a Windows runner. It must point at a Catch2 *source* checkout
+(`add_subdirectory` is used, not `find_package`, because a source tree has no
+`catch2-config.cmake`); if it does not look like one, configure stops with the
+clone command in the message instead of a generic "package not found".
+
 Catch2 is BSL-1.0; a local checkout is a legal and supported way to build.
 
 ## Configuration problems and their answers
@@ -73,8 +80,11 @@ Catch2 is BSL-1.0; a local checkout is a legal and supported way to build.
 * **Catch2 fetch fails** — no network or a proxy. Use the offline path above.
 * **`Python3_EXECUTABLE` not found** — the RT audit test falls back to `python3`;
   if that is missing too, configure still succeeds and the audit test is skipped.
-* **Warnings as errors on MSVC** — `/W4` is strict; fix the warning rather than
-  disabling the flag, because CI uses the same setting.
+* **Warnings as errors** — `/W4` (MSVC) and `-Wall -Wextra -Wconversion
+  -Wsign-conversion -Wshadow -Wunused-parameter` (GCC/Clang) are strict and CI
+  turns them into errors. Fix the warning instead of disabling the flag; see
+  "The warning contract" in `DEVELOPMENT.md` for the rules and the one scoped
+  exception in the tree.
 
 ## Build outputs
 
