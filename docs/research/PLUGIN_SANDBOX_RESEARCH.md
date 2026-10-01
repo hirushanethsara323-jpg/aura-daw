@@ -58,9 +58,10 @@ audio thread (host)                       helper process
   n+1:  read the block the helper finished (C) ◀── publish ◀── read B, process, write C
 ```
 
-* Two shared audio slots in flight; the host writes the *current* block and reads the
-  *previously processed* one. The host thread does a bounded amount of work (a copy in,
-  a copy out) and never waits on the helper.
+* Two shared audio slots, **one block in flight**; the host writes the *current*
+  block into the slot the helper is finished with and reads the *previously processed*
+  one out of the other. The host thread does a bounded amount of work (a copy in, a
+  copy out) and never waits on the helper.
 * The price is **exactly one block of latency**, which is *measurable* and therefore
   *compensable*: the proxy reports it through `latencySamples()` and the graph's
   existing delay compensation aligns it with the rest of the session (M5's
@@ -89,6 +90,42 @@ counter — the same pattern as AURA's existing lock-free queues
 Non-real-time traffic (load, unload, state blobs, parameter lists, GUI) goes over a
 control channel (pipe on Windows, socketpair/pipe on POSIX) where blocking is
 allowed, because none of it happens on the audio thread.
+
+### Phase 1 refinements — what building it changed
+
+The transport was written, compiled against the strict warning set and the allocation
+tracker, and tested before anything was built on top of it. Four decisions in the code
+are stricter than the sketch above, each for a reason that only shows up once the two
+sides are real:
+
+1. **The host reads the helper's watermark *before* it hands the next block over.**
+   With the load after the hand-over, a helper fast enough to answer inside the host's
+   own call would deliver block *n* on call *n + 1* sometimes and on call *n + 2*
+   other times. Latency that moves from block to block is latency no host can
+   compensate, so the fast case is deliberately ignored: block *n* is answered on call
+   *n + 1*, always, and delay compensation has one number to work with.
+2. **The host publishes only when the helper is fully caught up**, which is what makes
+   the two slots sufficient without ever overwriting a slot in use. The cost is a
+   requirement that a sandboxed plug-in processes a block faster than the block period
+   in wall-clock terms; a helper that cannot yields *dropped* blocks (counted, and
+   every dropped block is dry audio the plug-in never saw), never a stalled host.
+3. **Both sides keep their own watermark.** `helperSequence` means *finished* — it is
+   what the host tests and reads back against. The helper's *acquired* position is
+   helper-side state (`HelperAudioPort::consumed_`); deriving one from the other
+   miscounts skipped blocks and, worse, lets `publishResult()` claim a block the
+   plug-in never touched if the host published another one in the meantime.
+4. **A region has a caller-facing name and a platform name.** The name that travels to
+   the helper (command line, logs) is plain; `Local\` on Windows and the leading slash
+   on POSIX are added in exactly one place. Sanitising an already-decorated name — the
+   first version did — turns `/aura-…` into `/_aura-…` and the helper can never attach.
+   The arena also carries magic + version, so a helper built by a different AURA refuses
+   the region instead of misreading its layout; the record offsets themselves are pinned
+   by `static_assert(offsetof(…))`, because a reordering can keep `sizeof()` identical.
+
+Everything above is asserted in `tests/plugin/SandboxTransportTests.cpp` (11 cases):
+ABI and lock-free checks, attach/refuse by version, region-name isolation, the exact
+one-block round trip, late-helper drops, helper catch-up skips, geometry rejection, ring
+ordering and overflow, and zero allocation on the audio-thread path.
 
 ## Decision 3 — crash protocol: the session keeps playing
 
@@ -158,9 +195,12 @@ The host-side extensions AURA implements first: `log`, `thread-check`, `params`,
 
 ## Phases (each one lands with tests or it does not land)
 
-1. **Transport first, in one process** — `SharedAudioRing` + tests: publish/consume
-   ordering, overrun/underrun behaviour, sequence-counter correctness, no allocation
-   after `prepare()`.
+1. **Transport first, in one process** — **landed**: `sandbox/SandboxArena.hpp`
+   (layout + `HostAudioPort`/`HelperAudioPort` + the record rings), `sandbox/SharedMemory.hpp`
+   (named region, Windows and POSIX) and `tests/plugin/SandboxTransportTests.cpp`
+   (11 cases): publish/consume ordering, the exact one-block round trip, late-helper
+   drops, catch-up skips, overrun behaviour, sequence-counter correctness, attach/refuse
+   by version, and no allocation on the audio-thread path.
 2. **Helper process** — `aura_plugin_host` loads one bundle, runs the RT loop against
    the arena, and reports state over the control channel; started by the supervisor.
 3. **Proxy** — `SandboxedPluginInstance` implements `PluginInstance`; the chain and
