@@ -201,8 +201,14 @@ The host-side extensions AURA implements first: `log`, `thread-check`, `params`,
    (11 cases): publish/consume ordering, the exact one-block round trip, late-helper
    drops, catch-up skips, overrun behaviour, sequence-counter correctness, attach/refuse
    by version, and no allocation on the audio-thread path.
-2. **Helper process** — `aura_plugin_host` loads one bundle, runs the RT loop against
-   the arena, and reports state over the control channel; started by the supervisor.
+2. **Helper process** — *half landed*: the control channel (framed JSON envelopes,
+   capped and deadline-bounded, with a peer close distinguishable from a timeout) and
+   the spawner (`src/plugin/sandbox/ControlChannel.*`, `HelperProcess.*`, tested against
+   a real second process in `tests/plugin/ControlChannelTests.cpp`). What remains is the
+   helper binary itself: `aura_plugin_host` loads one bundle, runs the RT loop against
+   the arena, and reports state over the channel; the supervisor watches it. The
+   Windows job object lands with step 6, which is where it belongs - it is about what a
+   *crashing* helper takes with it.
 3. **Proxy** — `SandboxedPluginInstance` implements `PluginInstance`; the chain and
    therefore the whole engine see no difference. Tests: audio equals the in-process
    result within the compensated block, parameters and notes cross, state round-trips.
