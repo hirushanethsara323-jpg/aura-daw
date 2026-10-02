@@ -4,6 +4,8 @@
 // ============================================================================
 #include "aura/audio/AudioClip.hpp"
 
+#include "aura/core/Realtime.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -68,16 +70,33 @@ int Clip::render(time::SamplePos timelinePosition, int frames, float* const* des
         sourcePosition = 0;
 
     // Planar scratch is avoided: read straight into the destination channels.
-    std::vector<float*> offsets(static_cast<std::size_t>(channels));
+    //
+    // This was a bug: the pointer array was a std::vector, so every clip on every
+    // block allocated on the audio thread - 24 tracks at 128 frames is ~24 heap
+    // round trips every 2.7 ms.
+    //
+    // Neither gate caught it, and both reasons are worth keeping visible. Statically,
+    // rt_audit's function extractor stopped at the first one-line definition in a
+    // file and never reached render(). Dynamically, the engine's allocation-counter
+    // test does not reach this line either: measured in a build with
+    // -DAURA_ENABLE_ALLOC_TRACKING=ON, putting the vector back leaves the counter at
+    // zero, because no streaming clip is rendered inside the blocks that test
+    // measures. That gap is recorded in docs/TESTING.md rather than papered over.
+    if (channels <= 0 || channels > kMaxClipChannels) {
+        AURA_RT_ASSERT(channels > 0 && channels <= kMaxClipChannels,
+                       "Clip::render() refused a channel count outside its stack scratch");
+        return 0;
+    }
+    float* offsets[kMaxClipChannels];
     for (int channel = 0; channel < channels; ++channel)
-        offsets[static_cast<std::size_t>(channel)] = destinations[channel] + writeStart;
+        offsets[channel] = destinations[channel] + writeStart;
 
     stream_->seek(sourcePosition);
-    const int read = stream_->read(offsets.data(), writeFrames);
+    const int read = stream_->read(offsets, writeFrames);
     if (read < writeFrames) {
         // Past the end of the source: silence, never recycled audio.
         for (int channel = 0; channel < channels; ++channel) {
-            std::memset(offsets[static_cast<std::size_t>(channel)] + read, 0,
+            std::memset(offsets[channel] + read, 0,
                         static_cast<std::size_t>(writeFrames - read) * sizeof(float));
         }
     }
@@ -86,7 +105,7 @@ int Clip::render(time::SamplePos timelinePosition, int frames, float* const* des
     // per-sample state outside this call.
     const float gain = muted_ ? 0.0f : gain_;
     for (int channel = 0; channel < channels; ++channel) {
-        float* data = offsets[static_cast<std::size_t>(channel)];
+        float* data = offsets[channel];
         for (int i = 0; i < writeFrames; ++i) {
             const time::SamplePos clipPosition = positionInClip + i;
             const float fade = fadeGainAt(clipPosition);

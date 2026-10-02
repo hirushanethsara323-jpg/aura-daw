@@ -618,7 +618,19 @@ TEST_CASE("The engine performs no allocations on the audio path", "[engine][real
     rt::exitRealtimeThread();
 
     INFO("RT violations recorded on the audio path: " << rt::violationCount());
+    INFO("allocations on the audio path: " << rt::realtimeAllocationCount());
     REQUIRE(rt::violationCount() == 0);
+    // Asserted as well as reported. In a build with -DAURA_ENABLE_ALLOC_TRACKING=ON
+    // this turns the counter into a gate; without the flag it is inert and the static
+    // audit (tools/rt_audit.py) carries the claim.
+    //
+    // Honest limit, found while fixing an allocation in Clip::render(): this fixture's
+    // measured blocks do not render a clip from a stream, so a per-block allocation
+    // down that path is NOT caught here - putting Clip::render()'s pointer vector back
+    // leaves this counter at zero. Extending the fixture to cover it is recorded in
+    // docs/TESTING.md's gap table; asserting the number is still strictly better than
+    // only printing it.
+    REQUIRE(rt::realtimeAllocationCount() == 0u);
     rt::setTrackingEnabled(false);
 }
 

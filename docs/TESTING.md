@@ -288,4 +288,5 @@ carries the full table and labels that row as a plan rather than a measurement.
 | GUI/interaction tests (they do not exist because the shell does not exist) | M9 |
 | Real audio hardware in CI (no sound card on runners) | never — mitigated by the mock device and by manual device-matrix testing |
 | Accessibility automation (contrast, focus order, screen-reader smoke test) | M10, tracked in `research/ACCESSIBILITY_LOCALIZATION_RESEARCH.md` |
+| The engine's allocation-counter test does not render a clip from a stream | Found while fixing a per-block `std::vector` in `Clip::render()`: with `-DAURA_ENABLE_ALLOC_TRACKING=ON`, putting that allocation back leaves the counter at zero, so the fixture's measured blocks never reach that line. Extend `Fixture` in `tests/engine/EngineTests.cpp` so a streaming clip renders inside the measured window. `tools/rt_audit.py` covers the path in ordinary builds; the gap is documented in both `src/audio/AudioClip.cpp` and the test itself |
 | Performance gates (reported, not enforced) | M5, needs a pinned machine |
