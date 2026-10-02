@@ -93,6 +93,11 @@ CONTROL_THREAD_FUNCTIONS = [
     r"^set[A-Z].*", r"^configure.*", r"^load.*", r"^save.*", r"^scan.*",
     r"^enumerate.*", r"^start$", r"^stop$", r"^shutdown$", r"^rebuild.*",
     r"^applyDelayCompensation$",
+    # Lane::sampleInto() fills a caller-owned std::vector for the UI to draw and for
+    # the offline renderer to pre-compute a curve - it reserves and push_backs, which
+    # no audio-thread function may do, and its only caller in the tree is a test.
+    # Per-block automation on the audio path goes through valueAt() instead.
+    r"^sampleInto$",
 ]
 
 # ---------------------------------------------------------------------------
@@ -251,13 +256,24 @@ def extract_functions(path: str, text: str):
                     depth = 1
                     pending = ""
                     pending_line = 0
-                    # Body text after the brace on the same line.
+                    # Body text after the brace on the same line. Its braces have to
+                    # be counted too: a one-line definition
+                    # (`Type C::f() noexcept { return g(); }`) closes on the line it
+                    # opened, and not counting that close left the scanner believing
+                    # it was still inside `f` for the rest of the translation unit -
+                    # every function after it went unaudited. Found by the sandbox
+                    # transport, whose accessors are one-liners.
                     if tail.strip():
                         current[2].append((number, tail, raw))
+                        depth += tail.count("{") - tail.count("}")
+                        if depth <= 0:
+                            yield current[0], current[1], number, current[2]
+                            current = None
+                            pending = ""
+                            pending_line = 0
                 else:
                     pending = ""
                     pending_line = 0
-                # A brace can open and close on the same line (rare here).
                 continue
             pending += " " + code
             if not pending.strip():
