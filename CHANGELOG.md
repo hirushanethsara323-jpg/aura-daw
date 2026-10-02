@@ -13,6 +13,70 @@ written down here did not land.
 
 ### Added
 
+- **M7 phase 2 — the plug-in helper process.** `aura_plugin_host`
+  (`tools/plugin_host/PluginHostMain.cpp`) is the other side of the sandbox: a
+  separate program that attaches to a mapping it did not create, runs audio
+  through it and exits with a number that says why it stopped. It has never heard
+  of the engine, the project or a plug-in format — those sit behind
+  `SandboxProcessor`. Audio now leaves one process, is processed in another and
+  comes back, which is the first point at which this milestone tests isolation
+  rather than a data structure. Its audio path runs under **back-pressure**: it
+  holds one processed block until the host has room instead of dropping it when
+  the output ring is full. The first version dropped, and a 200-block test lost
+  two to five blocks depending on scheduling; a bounded retry was tried and was
+  worse, because any budget short of "wait for the host" still drops under load.
+  Holding one block costs nothing, since the rings are two slots deep and the
+  host pops before it pushes — which is exactly why `SharedAudioRing::exchange()`
+  is ordered that way.
+- `plugin::sandbox::ProcessSupervisor` — starts a long-lived helper, notices when
+  it stops and stops it when it will not (polite signal, grace period, then
+  `SIGKILL` to the whole process group). Deliberately *not*
+  `plugin::runChildProcess()`: that one is spawn-wait-report with a wall-clock
+  deadline, the right shape for a scanner that should answer in milliseconds and
+  the wrong one for a process meant to run for a session. It widens paths with
+  `MultiByteToWideChar` rather than byte by byte, which the scanner's helper does
+  and which is wrong for any Windows user whose name holds a character outside
+  ASCII.
+- `plugin::sandbox::SharedMemory` — a named mapping with **asymmetric ownership**:
+  the creator unlinks it on release and an opener only unmaps, so a helper that
+  exits cleanly cannot pull a session's buffers out from under the host, and a
+  host that shuts down cannot orphan a name that would make the next session's
+  `create()` fail with `AlreadyExists`. POSIX `shm_open`/`mmap`, Windows
+  `CreateFileMappingW`/`MapViewOfFileEx`, one shared name-validation rule, and
+  `platformShmName()` for the `/aura-` and `Local\aura-` prefixes.
+- `plugin::sandbox::SandboxProcessor` — the format-agnostic seam a helper drives
+  (prepare, process, parameter, note-in, note-out, state), a registry, and a
+  reference processor: gain on parameter 0, notes echoed back. Deterministic on
+  purpose, so a test can predict every sample. Without it the cross-process path
+  could only be exercised with a real third-party bundle, which no CI runner has,
+  and a path CI never runs is a path that is broken.
+- `plugin::sandbox::HelperProtocol` — the contract between the two programs: the
+  helper's file name, its switches, its exit codes and its processor ids. It is a
+  wire format in all but name, and each side can detect disagreement with it: the
+  helper checks the arena's layout version and the host checks the exit code.
+- `ArenaView::attach(bytes, size)` — attach using the spec the peer's own header
+  declares, because a helper has no independent copy to compare against and
+  inventing one would make the comparison meaningless. Trusting an untrusted
+  header is safe here only because the header is then *proved* against the bytes:
+  magic, layout version, a spec that normalises, offsets equal to what that spec
+  implies, and a mapping large enough for the result. Four tests lie about each
+  of those in turn and check the refusal.
+- 12 tests in `tests/plugin/sandbox/SandboxHelperTests.cpp` — 5 tagged `[shm]`
+  for the mapping, 7 tagged `[helper]` for the process. The end-to-end one pushes
+  200 blocks whose signal is derived from the block number and asserts that every
+  returned sample equals its input times exactly 0.5, that every origin arrives
+  once and in order, that both notes come back, that the helper exits 0 on its
+  own and that its heartbeat counts 200. Four more cover a helper that finishes
+  on its own, one that cannot be started, one whose host goes quiet (it exits
+  with `kHostGone` rather than waiting forever), and a supervisor that goes out
+  of scope and takes its helper with it.
+- The helper's host-gone deadlines: `--startup-timeout-ms` before the first block
+  and `--idle-exit-ms` after it, because "no blocks yet" means different things
+  before and after a session has been live. Both are backstops — the real
+  watchdog counts blocks in the host (phase 4) and a Windows job object with
+  `KILL_ON_JOB_CLOSE` (phase 6) does not need the helper to guess anything about
+  time at all.
+
 - **M7 phase 1 — the shared-memory sandbox transport.**
   `include/aura/plugin/sandbox/SandboxArena.hpp` and `SharedAudioRing.hpp` with
   `src/plugin/sandbox/*.cpp`: the transport an out-of-process plug-in host will
@@ -59,6 +123,15 @@ written down here did not land.
 
 ### Changed
 
+- `tools/rt_audit.py` now audits the helper's real-time loop: `RT_SCOPE_GLOBS`
+  gains `tools/plugin_host/*.cpp` and `RT_FUNCTION_PATTERNS` gains
+  `^runHelperLoop$`. The helper's loop is a real-time thread in every sense the
+  engine's callback is — no allocation, no locks, no file IO, no exceptions, no
+  logging — and it is *allowed* to sleep when idle, which the engine's callback
+  is not, because nothing is waiting on it and a helper that spun would burn the
+  core the host's callback needs. A new audit scope nobody verified is a
+  decoration, so this one was checked by injecting a `std::vector` into the loop,
+  confirming the audit fails the build, and reverting.
 - `tools/rt_audit.py` scope: the sandbox headers and sources are on the audio path by
   definition, and boundary-crossing names (`push*`, `pop*`, `exchange`, `publish*`)
   are audited. `AudioEngine::publishPlan` and `Automation Lane::sampleInto` are

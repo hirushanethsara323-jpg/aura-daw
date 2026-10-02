@@ -18,7 +18,7 @@ file on disk to the speakers. Decisions behind this shape are in
    │  graph/       GraphNode · GraphPlan · GraphBuilder · SampleStream│
    │  audio/       Track · Mixer · AudioClip · clipops · WaveformCache│
    │               RecordingEngine                                    │
-   │  transport/   Transport (one owner of position/state/loop)        │
+   │  transport/   Transport (one owner of position/state/loop)       │
    │  time/        TempoMap · BBT · SMPTE · musical arithmetic        │
    │  midi/        Message · MidiClip · MidiInputRouter · Instrument  │
    │  automation/  Lane · AutomationRecorder · TargetRange            │
@@ -26,7 +26,7 @@ file on disk to the speakers. Decisions behind this shape are in
    │  project/     Project · MediaPool · Autosave · recovery          │
    │  commands/    ids · CommandRegistry · UndoHistory · edits        │
    │  plugin/      PluginHost surface · PluginDatabase · PluginChain  │
-   │               sandbox/ SharedArena + audio rings (M7 transport)  │
+   │               sandbox/ arena + rings + helper process (M7)       │
    └──────────────────────────────────────────────────────────────────┘
                   │  blocks of float, planar
                   ▼
@@ -144,5 +144,5 @@ turn into a sentence.
 |------|-----------|-----------|
 | Multichannel | graph, insert and meter paths are already channel-count aware; the device layer is stereo-first | after M5 |
 | Sample-rate conversion | import currently refuses a mismatch rather than resampling | after M5 |
-| Plug-in sandbox | `PluginHost` is the only vendor-facing surface, so the transport can be replaced with an out-of-process one | M7 |
+| Plug-in sandbox | `PluginHost` is the only vendor-facing surface, so the transport can be replaced with an out-of-process one. M7 phases 1–2 built that transport and the helper process that runs on it; phase 3 puts a `PluginInstance` proxy on top, and the surface is what makes that a swap rather than a rewrite | M7 |
 | UI | `app/` Win32 + Direct2D shell consuming commands and atomics only | M9–M10 |
