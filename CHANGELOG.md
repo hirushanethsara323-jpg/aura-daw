@@ -43,7 +43,13 @@ written down here did not land.
   host that shuts down cannot orphan a name that would make the next session's
   `create()` fail with `AlreadyExists`. POSIX `shm_open`/`mmap`, Windows
   `CreateFileMappingW`/`MapViewOfFileEx`, one shared name-validation rule, and
-  `platformShmName()` for the `/aura-` and `Local\aura-` prefixes.
+  `platformShmName()` for the `/aura-` and `Local\aura-` prefixes. **Windows has no
+  unlink**, so the asymmetry is POSIX-only in the literal sense: a named section
+  lives until its last handle closes, and `create()` on a name a live peer still
+  holds correctly reports `AlreadyExists` rather than handing back that peer's
+  section. The consequence is a rule for callers — *a session's name must be unique
+  to that session* — and it was found by CI's Windows jobs after a test asserting
+  the POSIX rule unconditionally had passed on Linux for a whole increment.
 - `plugin::sandbox::SandboxProcessor` — the format-agnostic seam a helper drives
   (prepare, process, parameter, note-in, note-out, state), a registry, and a
   reference processor: gain on parameter 0, notes echoed back. Deterministic on

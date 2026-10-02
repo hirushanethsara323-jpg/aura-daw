@@ -209,6 +209,17 @@ The host-side extensions AURA implements first: `log`, `thread-check`, `params`,
      bump that belongs with phase 4, where the blob is the recovery point and therefore
      has to be right. The helper clears the request bit without setting `kStateReady`,
      which is the honest answer.
+   - **A session's shared-memory name must be unique to that session.** POSIX has
+     `shm_unlink`, so a creator's release frees the name at once even while a helper
+     still has the object mapped; Windows has no unlink, so a named section lives
+     until its last handle closes and `create()` on a name a live peer holds reports
+     `AlreadyExists` — correctly, since the alternative is handing back that peer's
+     section. A fixed name would therefore collide on Windows exactly when a previous
+     helper is still alive, which is when a new session is most likely to start. This
+     was not found by reading the platform documentation: a test asserted the POSIX
+     rule unconditionally, passed on Linux for a whole increment, and CI's Windows
+     jobs disagreed with it. The rule is now written down for both platforms in
+     `SharedMemory.hpp` and tested on both. Phase 3's session owns name generation.
    Also added: `ArenaView::attach(bytes, size)`, which reads the spec from the peer's
    own header — a helper has no independent copy to compare against, and putting the
    spec on the command line would create a second source of truth that a stale launch

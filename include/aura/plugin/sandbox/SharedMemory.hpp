@@ -68,11 +68,25 @@ inline constexpr std::size_t kMaxShmNameLength = 64;
 /// A shared mapping. Movable, not copyable - two owners of one mapping would
 /// unmap it twice.
 ///
-/// The creator unlinks the object when it lets go; an opener only unmaps. That
-/// asymmetry is what stops the host's shutdown from pulling the mapping out from
-/// under a helper that is still reading it, and what stops a helper that crashes
-/// from leaving a stale object behind that the next session's `create()` would
-/// reject as AlreadyExists.
+/// The creator unlinks the object when it lets go; an opener only unmaps. On POSIX
+/// that asymmetry is literal - `shm_unlink` removes the *name* at once while an
+/// opener keeps reading valid memory - and it is what stops the host's shutdown from
+/// pulling the mapping out from under a helper that is still using it, and what stops
+/// a helper that crashes from leaving a stale object behind.
+///
+/// **Windows has no unlink, and this class does not pretend otherwise.** A named
+/// section object lives until its last handle closes, so a creator's `release()`
+/// frees the name only when no peer still holds it; while a helper is alive the name
+/// is taken and `create()` reports AlreadyExists. That is the correct answer - the
+/// alternative is handing back a live peer's section, which is precisely what
+/// `create()` exists to refuse - but it makes the two platforms differ in a way
+/// callers have to design around: **a session's name must be unique to that
+/// session.** A fixed name would collide on Windows whenever a previous helper is
+/// still alive, which is exactly when a new session is most likely to be starting.
+///
+/// Found by CI's Windows jobs, not by reading the documentation: the POSIX rule was
+/// written down here first, asserted by a test, and passed on Linux for a whole
+/// increment before a Windows runner disagreed with it.
 class SharedMemory {
 public:
     SharedMemory() = default;
@@ -87,6 +101,11 @@ public:
     /// from a crashed session holds a header whose counters mean nothing to this
     /// one, and quietly attaching to it is how a session starts with audio from a
     /// dead process in its buffers.
+    ///
+    /// On Windows a *live* peer produces the same AlreadyExists, because the name is
+    /// held until its last handle closes and there is no unlink to free it early.
+    /// Making the name unique to the session is what keeps that case unreachable -
+    /// see the class comment.
     ///
     /// Control thread only.
     [[nodiscard]] static AuraResult<SharedMemory> create(const std::string& name, std::size_t bytes);

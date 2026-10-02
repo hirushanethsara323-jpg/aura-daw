@@ -213,8 +213,31 @@ TEST_CASE("A mapping is a single owner: moving it does not unmap twice",
     moved = std::move(other.value());
     CHECK(moved.isValid());
     CHECK(moved.name() == "helper-test-move-other");
-    // "helper-test-move" was released by that assignment, so it can be created
-    // again - proof the unlink happened and nothing was orphaned.
+    // What "released" means differs by platform, and the difference is worth a test
+    // rather than a comment because it decides how a session picks its name. This
+    // case originally asserted the POSIX answer unconditionally and passed on Linux
+    // for a whole increment; CI's Windows jobs are what disagreed with it.
+#if defined(_WIN32)
+    // Windows has no shm_unlink: a named section lives until its last handle closes,
+    // and `peer` is still holding one. AlreadyExists is the correct report here -
+    // create() refusing is what stops it handing back a live peer's section.
+    auto whilePeerLives = SharedMemory::create("helper-test-move", kBytes);
+    REQUIRE(whilePeerLives.hasError());
+    CHECK(whilePeerLives.error().code == ErrorCode::AlreadyExists);
+    peer.value().release();
+#else
+    // POSIX: the creator's release() unlinked the NAME, so the peer is now reading
+    // an unnamed object that is still perfectly valid - which is the property that
+    // lets a host shut down without pulling buffers out from under a live helper.
+    CHECK(matchesStamp(peer.value().data(), kBytes, 0x33));
+    auto whilePeerLives = SharedMemory::create("helper-test-move", kBytes);
+    CHECK(whilePeerLives.hasValue()); // the name is already free again
+    whilePeerLives.value().release();
+#endif
+
+    // With nothing holding the old object, the name is free on both platforms -
+    // proof that the move-assignment above released what it held and orphaned
+    // nothing.
     auto recreated = SharedMemory::create("helper-test-move", kBytes);
     CHECK(recreated.hasValue());
 }
