@@ -153,8 +153,15 @@ live in the per-topic documents in this folder; this file is the index of record
 
 * **Accepted.** The MSVC and GCC flag sets are kept aligned, warnings are errors in
   CI (`/WX`, `-Werror`), and the only suppression in the tree is a scoped
-  `#pragma warning(disable : 4324)` around the two cache-line-padded lock-free
-  classes (`SpscQueue`, `AudioRingBuffer`).
+  `#pragma warning(disable : 4324)` around cache-line-padded lock-free structures.
+  The inventory, kept here because the rule requires an entry per suppression:
+  `SpscQueue` and `AudioRingBuffer` (`core/`), then `PodRingHeader` and
+  `ControlBlock` (`plugin/sandbox/SandboxArena.hpp`) and `AudioSlotHeader`
+  (`plugin/sandbox/SharedAudioRing.hpp`) — five sites, all `pragma push`/`pop` pairs
+  with the reason in the comment above them. The sandbox ones are non-negotiable in a
+  way the core ones merely are: that layout is shared between two processes and every
+  offset is part of a contract as fixed as a file format, so the padding is *stated*
+  rather than designed around.
 * **Why:** the first CI run was green on the "Repo hygiene" job and red on every
   build job — with failures that could not appear locally: GCC 13's `-Wshadow`
   rejecting `using Array = …` next to a `Type::Array` enumerator (GCC 14 accepts
@@ -277,13 +284,64 @@ live in the per-topic documents in this folder; this file is the index of record
   measured in isolation), and `std::simd` from C++26 is named as the development that
   would remove the cost side of the trade.
 
+## ADR-0017 — The sandbox transport's identity and ordering are explicit, not inferred
+
+* **Accepted.** Three things the M7 design assumed turned out to be wrong, and all
+  three were found by the transport's own two-thread test rather than by reading the
+  code.
+  1. **A block's identity travels with the block.** `AudioSlotHeader` carries an
+     `origin` field: the producer's own absolute block number. The consumer compares
+     it against what it expects and reports `inconsistent`/`outOfOrder` rather than
+     trusting the ring index.
+  2. **The seqlock version word is `memory_order_seq_cst`.** Both the writer's and the
+     reader's accesses to `ControlBlock::transportVersion` are `seq_cst`.
+  3. **A consumer finishes verifying a slot before it releases it.** The reader's
+     re-check of a slot's sequence happens before it advances `consumed`.
+* **Why:**
+  * *The index is not a tag.* The design's pipeline diagram implies the consumer can
+    work out which block a slot holds from where the ring has got to. After **any**
+    dropped block the input and output rings have different indices, so that inference
+    silently mislabels every subsequent block — and a mislabelled block is worse than a
+    lost one, because it sounds like the plug-in is working. `origin` costs 8 bytes in a
+    header already padded to a cache line.
+  * *Release/acquire is not enough for a seqlock.* The writer's `store(version + 1)`
+    must not be reordered after the payload stores, and the reader's payload loads must
+    not be reordered before its first `load(version)`. `release`/`acquire` order each
+    pair correctly but permit the reader's *second* version load to be hoisted above its
+    payload loads — the C++ abstract machine allows a reader to accept torn data under
+    an old, even version. x86-64 TSO forbids it, so the bug is invisible on the machine
+    it was written on and live on ARM. Correctness-by-ISA is not acceptable in a
+    boundary whose entire purpose is surviving a peer that misbehaves.
+  * *Releasing first fabricates tears.* The reader stored `consumed` and *then*
+    re-checked the sequence. The producer, correctly, took the slot the instant
+    `consumed` moved and stamped it with the next block's sequence — so the re-check
+    read the new value and reported `Torn` for a copy that was perfectly clean. The
+    stress test caught it at roughly one lost block in thirty thousand, which is also
+    roughly the rate at which it would have been dismissed as a flaky test instead of a
+    protocol bug. It was flaky for exactly one reason: the protocol was wrong.
+* **Rejected:** inferring block numbers from ring indices; a `release`/`acquire` seqlock
+  (plus `std::atomic_thread_fence(acq_rel)`, which orders the fences but still leaves the
+  reader's second load free to move relative to the payload); reporting `Torn` without
+  zeroing the destination (half of two different blocks is not audio); and treating an
+  occasional lost block as acceptable because a retry loop hides it.
+* **Consequences:** `seq_cst` on one word per transport exchange is a `mfence`-class cost
+  on x86 and is worth it — it is once per block, not once per sample. The rule generalises
+  and is written into the header: **a consumer may not release a slot until it has
+  finished verifying what it read from it.** The rings keep plain release-store/
+  acquire-load SPSC publication, which *is* sufficient there because each has a single
+  writer and a single reader and no read-modify-write of shared state. Separately,
+  `TransportStats::overruns` counts *refused pushes*, not dropped blocks — documented at
+  the field, because a caller that retries (a test) racks refusals up by design while a
+  real host, which cannot retry from inside an audio callback, sees exactly one dropped
+  block per refusal.
+
 ---
 
 ## Open decisions
 
 | # | Question | Needed by | What settles it |
 |---|----------|-----------|-----------------|
-| O-1 | Out-of-process plug-in sandbox: child process vs. JUCE-style plugin host process | M7 | measured crash rate + IPC latency budget |
+| O-1 | ~~Out-of-process plug-in sandbox: child process vs. JUCE-style plugin host process~~ — **settled** by [`PLUGIN_SANDBOX_RESEARCH.md`](PLUGIN_SANDBOX_RESEARCH.md): one *shared* helper process per policy (`SandboxPolicy::Shared` is the default for third-party plug-ins), not one per instance and not in-process. Phase 1 (the transport) is landed; ADR-0017 records the three design corrections it forced | M7 | done |
 | O-2 | VST3 SDK: statically linked and vendored into the build, or loaded through an optional adapter module | M6 | whether the MIT text can be redistributed in binary releases as we intend |
 | O-3 | MSIX in addition to an Inno Setup EXE | M11 | whether the Store/sideload story is worth the signing cost |
 | O-4 | ~~SIMD path (SSE2/AVX2) for the graph and EQ, or leave it to the compiler~~ — **settled by ADR-0016** (leave the elementwise loops to the compiler; unroll the recursions instead) | M5 | done |

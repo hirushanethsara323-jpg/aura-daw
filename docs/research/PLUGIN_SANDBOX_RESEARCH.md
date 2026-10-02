@@ -161,6 +161,22 @@ The host-side extensions AURA implements first: `log`, `thread-check`, `params`,
 1. **Transport first, in one process** — `SharedAudioRing` + tests: publish/consume
    ordering, overrun/underrun behaviour, sequence-counter correctness, no allocation
    after `prepare()`.
+   — **Landed.** `include/aura/plugin/sandbox/{SandboxArena,SharedAudioRing}.hpp` and
+   `src/plugin/sandbox/*.cpp`; 15 tests tagged `[sandbox]` in
+   `tests/plugin/sandbox/SandboxTransportTests.cpp`, including a two-thread run of
+   60 000 blocks that asserts every published block came back processed exactly once,
+   and a zero-allocation claim measured against `AURA_ENABLE_ALLOC_TRACKING` rather
+   than asserted from reading the code. Three corrections to this design were needed
+   while writing it (ADR-0017): the seqlock version word is `memory_order_seq_cst`,
+   because a release/acquire seqlock is reorderable and can hand a reader torn data
+   under a plausible version; a slot's block number travels in a producer-declared
+   `origin` field, because after any dropped block the ring index no longer identifies
+   it; and a consumer must finish verifying a slot before it releases it, because
+   releasing first lets the producer legitimately restamp the slot and fabricates a
+   torn read. The same work found two bugs outside the sandbox — a per-block
+   `std::vector` in `Clip::render()` on the audio thread, and a function extractor in
+   `tools/rt_audit.py` that silently skipped every function after the first one-line
+   definition in a file.
 2. **Helper process** — `aura_plugin_host` loads one bundle, runs the RT loop against
    the arena, and reports state over the control channel; started by the supervisor.
 3. **Proxy** — `SandboxedPluginInstance` implements `PluginInstance`; the chain and

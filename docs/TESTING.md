@@ -15,8 +15,11 @@ cd build && ctest --output-on-failure          # everything
 python3 tools/rt_audit.py .                    # the static RT audit, by hand
 ```
 
-`ctest` runs **111 entries**: 109 Catch2 test cases plus two static-analysis tests
-(`rt_audit` and `include_audit`). Current status: all passing.
+`ctest` runs **153 entries**: 151 Catch2 test cases plus two static-analysis tests
+(`rt_audit` and `include_audit`). Current status: all passing on Linux/GCC 14;
+143 of the same entries were recorded passing on Windows/MSVC at M6, and the count
+has moved since (the sandbox transport added 15, `Clip::render`'s regression added
+one).
 
 ## The layers
 
@@ -41,6 +44,7 @@ Question answered: *does this component behave the way its header says?*
 | Plugin | `tests/plugin/PluginTests.cpp` | database persistence/search/favourites/blacklist, chain order/bypass/latency, failed-instance skip, state blobs, and the honest "not compiled in" contract for formats this build does not host |
 | Plugin (VST 3) | `tests/plugin/Vst3HostingTests.cpp`, `tests/plugin/vst3/AuraTestPlugin.cpp` | only in a `-DAURA_ENABLE_VST3=ON` build: a real bundle is scanned, loaded, processed (parameters reach `ProcessData`, the audio obeys the reported latency), notes are delivered, state round-trips, and a bundle that hangs or crashes is quarantined by the child-process scanner |
 | Child process | `tests/plugin/ChildProcessTests.cpp` | the supervisor the scanner stands on: timeouts, crash reporting, missing executables, captured output |
+| Sandbox transport | `tests/plugin/sandbox/SandboxTransportTests.cpp` | M7 phase 1, tagged `[sandbox]`: the shared-memory layout (magic/version/spec/offset agreement, refusal to attach to a bad or short mapping, a `memcpy` round trip between two `ArenaView`s), the deferred one-block exchange and its latency accounting, ring-full and empty behaviour, planar and interleaved destinations, out-of-range and `Meta` MIDI on the wire, wrong-side calls, self-resynchronisation after a counter jump, the `seq_cst` ordering that a relaxed or release/acquire seqlock would get wrong, the allocation counter over a 2 000-block run, and a two-thread stress test (60 000 blocks) asserting every published block came back processed exactly once |
 
 ### 2. Integration tests
 
@@ -288,4 +292,5 @@ carries the full table and labels that row as a plan rather than a measurement.
 | GUI/interaction tests (they do not exist because the shell does not exist) | M9 |
 | Real audio hardware in CI (no sound card on runners) | never — mitigated by the mock device and by manual device-matrix testing |
 | Accessibility automation (contrast, focus order, screen-reader smoke test) | M10, tracked in `research/ACCESSIBILITY_LOCALIZATION_RESEARCH.md` |
+| The engine's allocation-counter test does not render a clip from a stream | Found while fixing a per-block `std::vector` in `Clip::render()`: with `-DAURA_ENABLE_ALLOC_TRACKING=ON`, putting that allocation back leaves the counter at zero, so the fixture's measured blocks never reach that line. Extend `Fixture` in `tests/engine/EngineTests.cpp` so a streaming clip renders inside the measured window. `tools/rt_audit.py` covers the path in ordinary builds; the gap is documented in both `src/audio/AudioClip.cpp` and the test itself |
 | Performance gates (reported, not enforced) | M5, needs a pinned machine |

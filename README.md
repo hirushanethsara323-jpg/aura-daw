@@ -9,10 +9,11 @@ ASIO opt-in), non-destructive recording and editing, a plug-in host surface, and
 offline renderer that reuses the live DSP graph rather than reimplementing it.
 
 > **Status:** engine milestone. The DSP, graph, engine, project, command and
-> device layers are implemented and covered by 95 passing test entries. The
-> Windows shell (`app/`) is the next milestone — until it lands, AURA is a library
-> and a test suite, not a window you can click. This is stated up front because the
-> project's rule is to document what exists rather than what is planned.
+> device layers are implemented and covered by 151 passing test cases (153 `ctest`
+> entries including two static audits). The Windows shell (`app/`) is the next
+> milestone — until it lands, AURA is a library and a test suite, not a window you
+> can click. This is stated up front because the project's rule is to document what
+> exists rather than what is planned.
 
 ## What works today
 
@@ -28,7 +29,7 @@ offline renderer that reuses the live DSP graph rather than reimplementing it.
 | MIDI | messages, clips, quantise, recording bake, input routing with panic, original built-in poly synth, voice stealing |
 | Automation | Read/Touch/Write/Latch, lanes with curve shapes, gesture recorder with thinning, target ranges |
 | Commands | ~38 built-in commands with ids, categories and default shortcuts, undo/redo with transactions and bounded history |
-| Plug-ins | **VST 3 hosting implemented** (`-DAURA_ENABLE_VST3=ON`, SDK fetched at a pinned tag and MIT-licensed): out-of-process scanning with timeouts and quarantine, parameters through the plug-in's own ranges, latency reporting, MIDI events, state round trip; database with search/favourites/blacklist, chains with order/bypass/latency. CLAP is not written; a build without the SDK says `NotImplemented` instead of failing obscurely |
+| Plug-ins | **VST 3 hosting implemented** (`-DAURA_ENABLE_VST3=ON`, SDK fetched at a pinned tag and MIT-licensed): out-of-process scanning with timeouts and quarantine, parameters through the plug-in's own ranges, latency reporting, MIDI events, state round trip; database with search/favourites/blacklist, chains with order/bypass/latency. CLAP is not written; a build without the SDK says `NotImplemented` instead of failing obscurely. **M7 phase 1 landed:** `plugin/sandbox/` holds the shared-memory transport an out-of-process plug-in host will speak over — no helper process yet, so a crashing plug-in still crashes AURA |
 | Localisation | catalogue-based, English shipped, missing-key fallback, error-message translation |
 | Diagnostics | TRACE→FATAL structured logging, in-memory ring, CPU/xrun reporting, static real-time audit |
 
@@ -68,6 +69,8 @@ Details, options and troubleshooting: [`docs/BUILDING.md`](docs/BUILDING.md).
 | [`docs/DSP.md`](docs/DSP.md) / [`docs/MIDI.md`](docs/MIDI.md) / [`docs/PLUGIN_HOST.md`](docs/PLUGIN_HOST.md) | subsystem references |
 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | budgets and how they are measured |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | milestones M0–M12 |
+| [`PROJECT_STATUS.md`](PROJECT_STATUS.md) | what works, what is partial, what is not built |
+| [`CHANGELOG.md`](CHANGELOG.md) | every change, in the commit that made it |
 | [`docs/research/`](docs/research/) | the research and decision record |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | common failures and fixes |
 | [`docs/SECURITY.md`](docs/SECURITY.md) / [`docs/LICENSES.md`](docs/LICENSES.md) / [`CONTRIBUTING.md`](CONTRIBUTING.md) | policy |

@@ -51,6 +51,17 @@ struct Fade {
     FadeShape shape = FadeShape::EqualPower;
 };
 
+/// The widest clip `Clip::render()` will fill, in channels.
+///
+/// `render()` runs on the audio thread and needs an array of per-channel write
+/// pointers. Allocating one per block is exactly what the audio thread must not do,
+/// so the array is on the stack and this constant is its length. 64 is the same
+/// channel budget the M7 sandbox transport carries (`plugin::sandbox::kMaxChannels`),
+/// so a clip can never be wider than the path that would have to move it. A clip
+/// asking for more renders as silence and trips an RT assert rather than overflowing
+/// the scratch - see `Clip::render()`.
+inline constexpr int kMaxClipChannels = 64;
+
 /// Non-destructive audio clip.
 class Clip {
 public:

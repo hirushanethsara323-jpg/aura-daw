@@ -194,6 +194,37 @@ TEST_CASE("Clip rendering is non-destructive and window-limited", "[audio][clip]
     REQUIRE(clip.render(5000, 512, view.channelPointers, 2) == 0);
 }
 
+TEST_CASE("A clip refuses a channel count its stack scratch cannot hold",
+          "[audio][clip][realtime][regression]") {
+    // render() keeps its per-channel write pointers in a fixed stack array
+    // (audio::kMaxClipChannels) because building that array per block would put the
+    // heap on the audio thread. This pins both ends of the boundary: a count inside
+    // it renders, a count outside it renders nothing instead of walking off the end
+    // of the array.
+    //
+    // Regression for a std::vector<float*> that lived here until rt_audit's function
+    // extractor was fixed enough to see the function at all. `view` only owns two
+    // channel pointers, so every refused call below would have been an out-of-bounds
+    // write if the guard were missing or moved after the pointer setup.
+    audio::Clip clip(1, audio::ClipType::Audio, "Boundary");
+    clip.setStart(0);
+    clip.setLength(1000);
+    clip.setSourceOffset(0);
+    clip.setStream(sineStream(48000));
+    REQUIRE(clip.isReady());
+
+    test::Block block(2, 64);
+    auto view = block.view(64);
+
+    // Inside the budget: the window is filled.
+    REQUIRE(clip.render(0, 64, view.channelPointers, 2) == 64);
+    // The widest scratch, one past it, and both non-positive counts: all refused.
+    REQUIRE(audio::kMaxClipChannels == 64);
+    REQUIRE(clip.render(0, 64, view.channelPointers, audio::kMaxClipChannels + 1) == 0);
+    REQUIRE(clip.render(0, 64, view.channelPointers, 0) == 0);
+    REQUIRE(clip.render(0, 64, view.channelPointers, -1) == 0);
+}
+
 TEST_CASE("Clip operations edit the window, not the source", "[audio][clip]") {
     audio::Clip clip(1, audio::ClipType::Audio, "Take");
     clip.setStart(0);
