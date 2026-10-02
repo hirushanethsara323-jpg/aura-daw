@@ -201,6 +201,8 @@ add_library(aura_engine STATIC
   src/plugin/sandbox/SandboxArena.cpp
   src/plugin/sandbox/SharedAudioRing.cpp
   src/plugin/sandbox/SharedMemory.cpp
+  src/plugin/sandbox/ProcessSupervisor.cpp
+  src/plugin/sandbox/SandboxProcessor.cpp
   src/automation/Automation.cpp
   src/timeline/Timeline.cpp
   src/engine/AudioEngine.cpp
@@ -359,6 +361,29 @@ target_link_libraries(aura_scan_host PRIVATE Aura::Engine Aura::Core)
 if(AURA_ENABLE_VST3)
   target_include_directories(aura_scan_host PRIVATE src/plugin/vst3)
 endif()
+
+# ---------------------------------------------------------------------------
+# Plug-in helper process (M7)
+#
+# The other side of the sandbox: a separate process that attaches to a shared
+# mapping and runs a plug-in in there. Built in every configuration, including one
+# with no plug-in SDK at all - it ships a reference processor of its own, and the
+# cross-process path is what the tests exercise, so a build without it would be a
+# build that cannot test its own sandbox.
+#
+# Pinned to one output directory for the same reason aura_scan_host is: the host
+# looks for a helper next to the running executable and in ../tools, and a
+# multi-config generator would otherwise append the configuration name and put it
+# where that search does not reach.
+# ---------------------------------------------------------------------------
+add_executable(aura_plugin_host tools/plugin_host/PluginHostMain.cpp)
+set_target_properties(aura_plugin_host PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+foreach(_aura_config IN LISTS CMAKE_CONFIGURATION_TYPES)
+  string(TOUPPER "${_aura_config}" _aura_config_upper)
+  set_target_properties(aura_plugin_host PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_${_aura_config_upper} "${CMAKE_BINARY_DIR}/tools")
+endforeach()
+target_link_libraries(aura_plugin_host PRIVATE Aura::Engine Aura::Core)
 
 # ---------------------------------------------------------------------------
 # Application (JUCE) - Windows only, optional so the engine can be built/tested

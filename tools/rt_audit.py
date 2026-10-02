@@ -74,6 +74,12 @@ RT_SCOPE_GLOBS = [
     # push/pop pair is called from inside the device callback, once per block.
     "include/aura/plugin/sandbox/*.hpp",
     "src/plugin/sandbox/*.cpp",
+    # M7: the helper's loop is a real-time thread in every sense the engine's
+    # callback is - it must not allocate, lock, touch a file, log or throw. Auditing
+    # it is what makes that a property of the build rather than an intention of
+    # whoever wrote it. It is allowed to SLEEP when idle, which the engine's
+    # callback is not, and nothing in the check list forbids sleeping.
+    "tools/plugin_host/*.cpp",
 ]
 
 # Function names (matched on the identifier before the opening parenthesis) that
@@ -93,6 +99,9 @@ RT_FUNCTION_PATTERNS = [
     # reads like the contract it enforces.
     r"^push$", r"^pop$", r"^push[A-Z].*", r"^pop[A-Z].*",
     r"^exchange$", r"^publish.*",
+    # The plug-in helper's real-time loop. Named rather than matched by a shape so
+    # that the audit and the comment above it stay about one specific function.
+    r"^runHelperLoop$",
 ]
 
 # Functions that look like they are in scope but are documented control-thread

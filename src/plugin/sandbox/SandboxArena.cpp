@@ -230,6 +230,39 @@ AuraResult<ArenaView> ArenaView::create(void* bytes, std::size_t size, const Are
     return view;
 }
 
+AuraResult<ArenaView> ArenaView::attach(void* bytes, std::size_t size) {
+    // Only the checks needed to READ the header safely are done here; the 3-argument
+    // overload repeats them and then does the real work. Repeating three comparisons
+    // is cheaper than splitting the validation in two, and it keeps one code path
+    // that can disagree with itself about what a valid header is.
+    if (bytes == nullptr)
+        return failureT<ArenaView>(
+            makeError(ErrorCode::InvalidArgument, "an arena needs mapped bytes to be attached to"));
+    if (size < sizeof(ArenaHeader))
+        return failureT<ArenaView>(makeError(
+            ErrorCode::InvalidArgument, "the mapping is too small to hold an arena header",
+            "have " + std::to_string(size) + " bytes, need " + std::to_string(sizeof(ArenaHeader))));
+    if (!isAlignedBase(bytes))
+        return failureT<ArenaView>(alignmentError(bytes));
+
+    const auto* header = reinterpret_cast<const ArenaHeader*>(bytes);
+    if (header->magic != kArenaMagic)
+        return failureT<ArenaView>(makeError(
+            ErrorCode::UnsupportedFormat, "the shared region is not an AURA sandbox arena",
+            "magic 0x" + strings::toHex(header->magic, 8)));
+    if (header->layoutVersion != kLayoutVersion)
+        return failureT<ArenaView>(makeError(
+            ErrorCode::UnsupportedVersion,
+            "the peer's arena layout is a different version than this build's",
+            "peer " + std::to_string(header->layoutVersion) + ", this build " +
+                std::to_string(kLayoutVersion)));
+
+    // From here the header describes an arena this build understands, so the spec it
+    // declares is worth validating - and the overload below proves it against the
+    // offsets actually present.
+    return attach(bytes, size, header->spec);
+}
+
 AuraResult<ArenaView> ArenaView::attach(void* bytes, std::size_t size, const ArenaSpec& expected) {
     if (bytes == nullptr)
         return failureT<ArenaView>(

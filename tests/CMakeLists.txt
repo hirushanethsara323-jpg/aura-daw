@@ -171,6 +171,10 @@ endif()
 # fuzz/FuzzSupport.hpp so the deterministic test and the libFuzzer targets start
 # from the same inputs (a bug found by one reproduces in the other).
 target_include_directories(aura_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src/plugin)
+# The sandbox helper is a separate binary the tests spawn, so it has to exist before
+# they run. Unlike the VST 3 scanner helper it is needed in every configuration,
+# because what is under test is the cross-process transport and not a plug-in format.
+add_dependencies(aura_tests aura_plugin_host)
 if(AURA_ENABLE_VST3)
   # ChildProcessTests drives the real scanner helper, which is a separate binary.
   target_include_directories(aura_scan_host PRIVATE ${CMAKE_SOURCE_DIR}/src/plugin)
