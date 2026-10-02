@@ -86,7 +86,7 @@ What that does, and why:
 | **VST 3 loading: parameters, latency, audio, events, state round trip** | **implemented + tested against a real bundle** |
 | CLAP instantiation | not written |
 | Editor *window* embedding | not built; `createEditor()` returns the plug-in's own view handle and the shell owns it (M9/M10). A generic parameter list is the fallback |
-| Out-of-process **audio** sandbox | **transport built, no helper process yet** (M7 phase 1) - see the honest limitation below |
+| Out-of-process **audio** sandbox | **transport and helper process built, no caller yet** (M7 phases 1-2) - see the honest limitation below |
 
 ## Scanning
 
@@ -210,13 +210,26 @@ turn a glitch into a stutter. The chain skips bypassed and failed slots, and
   helper process is a matter of replacing the transport (shared memory + IPC) instead
   of rewriting the mixer. A DAW that claims sandboxing it does not have is worse than
   one that admits the gap.
-  **What has been built:** that transport. `include/aura/plugin/sandbox/` holds
-  `SandboxArena` (a fixed layout whose every region is an *offset* from the mapping
-  base, so the engine and a helper may map it at different addresses) and
-  `SharedAudioRing` (a one-block-deferred audio exchange, plus parameter, note-in and
-  note-out rings, a control block and a telemetry block). It is 15 tests deep and has
-  no caller: nothing spawns a helper, so nothing is isolated yet. The crash protocol,
-  the watchdog and the helper itself are M7 phases 2-6 in
+  **What has been built:** the transport, the mapping it lives in, and the process on
+  the other side of it. `include/aura/plugin/sandbox/` holds `SandboxArena` (a fixed
+  layout whose every region is an *offset* from the mapping base, so the engine and a
+  helper may map it at different addresses), `SharedAudioRing` (a one-block-deferred
+  audio exchange, plus parameter, note-in and note-out rings, a control block and a
+  telemetry block), `SharedMemory` (the named mapping both sides open, whose ownership
+  is asymmetric: the creator unlinks, an opener only unmaps), `SandboxProcessor` (the
+  format-agnostic seam a helper drives, plus a reference processor so the path is
+  testable with no SDK installed) and `HelperProtocol` (the two programs' contract:
+  switches, exit codes, processor ids). `aura_plugin_host` is the helper itself: a
+  separate program, built in every configuration, that attaches to a mapping it did
+  not create and runs audio through it under back-pressure - it holds a processed
+  block until the host has room rather than dropping it. `ProcessSupervisor` starts
+  it, watches it, and kills the whole process group when it will not stop.
+  `tools/rt_audit.py` scans the helper's loop, so its claim to be real-time safe is
+  checked by the build rather than taken on its author's word.
+  **What is still missing is the caller.** Nothing in the engine spawns a helper yet,
+  so no plug-in is isolated by any of this: the proxy that turns a session into a
+  `PluginInstance` is M7 phase 3, and the crash protocol, the watchdog and the policy
+  plumbing that make the isolation worth having are phases 4-6 in
   [`research/PLUGIN_SANDBOX_RESEARCH.md`](research/PLUGIN_SANDBOX_RESEARCH.md).
 * **Only bus 0 of the plug-in is the track.** Sidechain and aux buses are wired to
   silence, not routed: the graph has no sidechain send yet (M7/M8). A plug-in with a

@@ -13,6 +13,76 @@ written down here did not land.
 
 ### Added
 
+- **M7 phase 2 — the plug-in helper process.** `aura_plugin_host`
+  (`tools/plugin_host/PluginHostMain.cpp`) is the other side of the sandbox: a
+  separate program that attaches to a mapping it did not create, runs audio
+  through it and exits with a number that says why it stopped. It has never heard
+  of the engine, the project or a plug-in format — those sit behind
+  `SandboxProcessor`. Audio now leaves one process, is processed in another and
+  comes back, which is the first point at which this milestone tests isolation
+  rather than a data structure. Its audio path runs under **back-pressure**: it
+  holds one processed block until the host has room instead of dropping it when
+  the output ring is full. The first version dropped, and a 200-block test lost
+  two to five blocks depending on scheduling; a bounded retry was tried and was
+  worse, because any budget short of "wait for the host" still drops under load.
+  Holding one block costs nothing, since the rings are two slots deep and the
+  host pops before it pushes — which is exactly why `SharedAudioRing::exchange()`
+  is ordered that way.
+- `plugin::sandbox::ProcessSupervisor` — starts a long-lived helper, notices when
+  it stops and stops it when it will not (polite signal, grace period, then
+  `SIGKILL` to the whole process group). Deliberately *not*
+  `plugin::runChildProcess()`: that one is spawn-wait-report with a wall-clock
+  deadline, the right shape for a scanner that should answer in milliseconds and
+  the wrong one for a process meant to run for a session. It widens paths with
+  `MultiByteToWideChar` rather than byte by byte, which the scanner's helper does
+  and which is wrong for any Windows user whose name holds a character outside
+  ASCII.
+- `plugin::sandbox::SharedMemory` — a named mapping with **asymmetric ownership**:
+  the creator unlinks it on release and an opener only unmaps, so a helper that
+  exits cleanly cannot pull a session's buffers out from under the host, and a
+  host that shuts down cannot orphan a name that would make the next session's
+  `create()` fail with `AlreadyExists`. POSIX `shm_open`/`mmap`, Windows
+  `CreateFileMappingW`/`MapViewOfFileEx`, one shared name-validation rule, and
+  `platformShmName()` for the `/aura-` and `Local\aura-` prefixes. **Windows has no
+  unlink**, so the asymmetry is POSIX-only in the literal sense: a named section
+  lives until its last handle closes, and `create()` on a name a live peer still
+  holds correctly reports `AlreadyExists` rather than handing back that peer's
+  section. The consequence is a rule for callers — *a session's name must be unique
+  to that session* — and it was found by CI's Windows jobs after a test asserting
+  the POSIX rule unconditionally had passed on Linux for a whole increment.
+- `plugin::sandbox::SandboxProcessor` — the format-agnostic seam a helper drives
+  (prepare, process, parameter, note-in, note-out, state), a registry, and a
+  reference processor: gain on parameter 0, notes echoed back. Deterministic on
+  purpose, so a test can predict every sample. Without it the cross-process path
+  could only be exercised with a real third-party bundle, which no CI runner has,
+  and a path CI never runs is a path that is broken.
+- `plugin::sandbox::HelperProtocol` — the contract between the two programs: the
+  helper's file name, its switches, its exit codes and its processor ids. It is a
+  wire format in all but name, and each side can detect disagreement with it: the
+  helper checks the arena's layout version and the host checks the exit code.
+- `ArenaView::attach(bytes, size)` — attach using the spec the peer's own header
+  declares, because a helper has no independent copy to compare against and
+  inventing one would make the comparison meaningless. Trusting an untrusted
+  header is safe here only because the header is then *proved* against the bytes:
+  magic, layout version, a spec that normalises, offsets equal to what that spec
+  implies, and a mapping large enough for the result. Four tests lie about each
+  of those in turn and check the refusal.
+- 12 tests in `tests/plugin/sandbox/SandboxHelperTests.cpp` — 5 tagged `[shm]`
+  for the mapping, 7 tagged `[helper]` for the process. The end-to-end one pushes
+  200 blocks whose signal is derived from the block number and asserts that every
+  returned sample equals its input times exactly 0.5, that every origin arrives
+  once and in order, that both notes come back, that the helper exits 0 on its
+  own and that its heartbeat counts 200. Four more cover a helper that finishes
+  on its own, one that cannot be started, one whose host goes quiet (it exits
+  with `kHostGone` rather than waiting forever), and a supervisor that goes out
+  of scope and takes its helper with it.
+- The helper's host-gone deadlines: `--startup-timeout-ms` before the first block
+  and `--idle-exit-ms` after it, because "no blocks yet" means different things
+  before and after a session has been live. Both are backstops — the real
+  watchdog counts blocks in the host (phase 4) and a Windows job object with
+  `KILL_ON_JOB_CLOSE` (phase 6) does not need the helper to guess anything about
+  time at all.
+
 - **M7 phase 1 — the shared-memory sandbox transport.**
   `include/aura/plugin/sandbox/SandboxArena.hpp` and `SharedAudioRing.hpp` with
   `src/plugin/sandbox/*.cpp`: the transport an out-of-process plug-in host will
@@ -35,6 +105,42 @@ written down here did not land.
 
 ### Fixed
 
+- **The transport's seqlock payload was a data race, and MSVC `/O2` took the
+  licence.** `publishTransportSnapshot()` wrote `control->transport = snapshot` and
+  `readTransportSnapshot()` read it back the same way: a plain struct assignment
+  racing with a plain struct write, which is undefined behaviour regardless of how
+  carefully the version word is ordered. ADR-0017 had already fixed the *ordering*
+  of that version word and left the payload alone. CI's Windows Release job caught
+  the consequence — one read in 112 026 accepted a payload torn across two
+  snapshots, on a transport that had passed every Linux configuration and every
+  MSVC Debug build before it. The likely mechanism is common-subexpression
+  elimination across the reader's retry loop: a copy torn on attempt 0 reused on
+  attempt 1 and accepted under a version that matched. Both sides now copy the
+  snapshot word by word through `std::atomic_ref<std::uint64_t>` with
+  `memory_order_relaxed` — race-free, lock-free, and still ordered by the `seq_cst`
+  version word rather than by these accesses. `std::atomic_ref<TransportSnapshot>`
+  was rejected: a 48-byte `atomic_ref` is not lock-free, so it would have put a
+  mutex on the audio path to fix a race. No layout change — the snapshot is already
+  48 bytes on an 8-byte boundary, asserted rather than assumed, so `kLayoutVersion`
+  stays at 1. Tests: the tearing case 30 consecutive runs, the two-thread
+  60 000-block stress case 12, both clean.
+- **`tools/rt_audit.py` had two more silent blind spots.** (1) Its
+  `function_name_from_signature()` rejected any signature containing `[` before the
+  parameter list — a lambda test that also rejected `[[nodiscard]]`, so every
+  inline definition written with a leading attribute was skipped. Thirteen
+  real-time functions across the DSP, graph and sandbox headers were being counted
+  as audited by nothing. (2) Its two passes over a file made the audit-or-exempt
+  decision *separately* and could disagree, so a function could be counted as
+  scanned by the first pass and skipped by the second — reporting coverage the
+  audit did not have. The decision is now one function used by both passes,
+  attributes are stripped before anything inspects the text, and a name in the
+  real-time list beats a *shape* in the control-thread list (`^set[A-Z].*` had been
+  swallowing `setTargetGains()`, a two-float setter whose own doc comment says it
+  may be called from the audio thread). Exemptions are now printed with the run
+  rather than applied silently, so coverage is read off the output instead of
+  inferred from a count: 62 → 82 functions. Both fixes were found the same way —
+  inject a violation into a function that was supposed to be gated and watch
+  whether the audit notices.
 - **`Clip::render()` allocated on the audio thread.** It built a
   `std::vector<float*>` of per-channel write pointers on every call — roughly 24
   heap round trips every 2.7 ms in a 24-track session at 128 frames. Replaced with
@@ -59,6 +165,15 @@ written down here did not land.
 
 ### Changed
 
+- `tools/rt_audit.py` now audits the helper's real-time loop: `RT_SCOPE_GLOBS`
+  gains `tools/plugin_host/*.cpp` and `RT_FUNCTION_PATTERNS` gains
+  `^runHelperLoop$`. The helper's loop is a real-time thread in every sense the
+  engine's callback is — no allocation, no locks, no file IO, no exceptions, no
+  logging — and it is *allowed* to sleep when idle, which the engine's callback
+  is not, because nothing is waiting on it and a helper that spun would burn the
+  core the host's callback needs. A new audit scope nobody verified is a
+  decoration, so this one was checked by injecting a `std::vector` into the loop,
+  confirming the audit fails the build, and reverting.
 - `tools/rt_audit.py` scope: the sandbox headers and sources are on the audio path by
   definition, and boundary-crossing names (`push*`, `pop*`, `exchange`, `publish*`)
   are audited. `AudioEngine::publishPlan` and `Automation Lane::sampleInto` are

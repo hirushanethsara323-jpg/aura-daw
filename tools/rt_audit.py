@@ -74,6 +74,12 @@ RT_SCOPE_GLOBS = [
     # push/pop pair is called from inside the device callback, once per block.
     "include/aura/plugin/sandbox/*.hpp",
     "src/plugin/sandbox/*.cpp",
+    # M7: the helper's loop is a real-time thread in every sense the engine's
+    # callback is - it must not allocate, lock, touch a file, log or throw. Auditing
+    # it is what makes that a property of the build rather than an intention of
+    # whoever wrote it. It is allowed to SLEEP when idle, which the engine's
+    # callback is not, and nothing in the check list forbids sleeping.
+    "tools/plugin_host/*.cpp",
 ]
 
 # Function names (matched on the identifier before the opening parenthesis) that
@@ -93,6 +99,15 @@ RT_FUNCTION_PATTERNS = [
     # reads like the contract it enforces.
     r"^push$", r"^pop$", r"^push[A-Z].*", r"^pop[A-Z].*",
     r"^exchange$", r"^publish.*",
+    # The plug-in helper's real-time loop. Named rather than matched by a shape so
+    # that the audit and the comment above it stay about one specific function.
+    r"^runHelperLoop$",
+    # The transport snapshot's seqlock: both sides of it run on an audio thread (the
+    # host publishes from its callback, a peer reads from its own), and the word-wise
+    # copies are what make the payload race-free. All three are named because a
+    # future rename should break the audit loudly rather than silently drop the only
+    # check that a data race was fixed.
+    r"^readTransportSnapshot$", r"^copySnapshotFrom$", r"^copySnapshotTo$",
 ]
 
 # Functions that look like they are in scope but are documented control-thread
@@ -193,6 +208,7 @@ class ScanStats:
     files_scanned: int = 0
     functions_scanned: int = 0
     allows: list[str] = field(default_factory=list)
+    exemptions: list[str] = field(default_factory=list)
 
 
 def strip_comments_and_strings(line: str, in_block_comment: bool) -> tuple[str, bool]:
@@ -314,6 +330,19 @@ def extract_functions(path: str, text: str):
 
 def function_name_from_signature(signature: str) -> str | None:
     signature = signature.strip()
+    # Strip C++ attribute specifiers before anything else looks at the text. The
+    # bracket test below rejects lambdas, and it cannot tell `[[nodiscard]]` from
+    # `[&]` - so every definition written with a leading attribute was silently
+    # skipped, and `[[nodiscard]]` on an inline definition is this project's own
+    # style in the very headers this audit scans. A skipped function is not a clean
+    # function; it is an unaudited one, which is worse than a finding.
+    #
+    # This is the second extractor fault the sandbox work has found (the first was a
+    # one-line definition that left the scanner believing it was still inside a
+    # function for the rest of the translation unit). Both were found the same way:
+    # by injecting a violation into a function that was supposed to be gated and
+    # watching the audit stay quiet.
+    signature = re.sub(r"\[\[[^\]]*\]\]", " ", signature)
     if not signature or "(" not in signature:
         return None
     # Reject initialiser lists, lambdas, control statements.
@@ -332,6 +361,52 @@ def function_name_from_signature(signature: str) -> str | None:
     if "operator" in head:
         return None
     return name
+
+
+EXACT_NAME_PATTERN = re.compile(r"^\^([A-Za-z_~][A-Za-z0-9_]*)\$$")
+
+
+def names_exactly(name: str, patterns: list[str]) -> bool:
+    """True when one of `patterns` is the literal `^name$`, and so means this function.
+
+    Used to let a name beat a shape: `^setTargetGains$` in the real-time list is a
+    statement about one function, while `^set[A-Z].*` in the control-thread list is a
+    guess about a family of them, and the guess used to win.
+    """
+    return any(
+        (m := EXACT_NAME_PATTERN.match(pattern)) is not None and m.group(1) == name
+        for pattern in patterns
+    )
+
+
+def is_audited(name: str) -> bool:
+    """Whether this function is on the audio path as far as the audit is concerned.
+
+    One decision in one place, because the two passes over a file used to make it
+    separately and could disagree: the first counted a function as scanned while the
+    second skipped it, which reports coverage the audit does not have. That is worse
+    than not auditing the function - it says the function was checked.
+
+    Precedence, most specific statement first:
+      * a name in CONTROL_THREAD_FUNCTIONS wins outright. Both lists naming the same
+        function is a conflict somebody resolved on purpose and wrote a reason for
+        (`sampleInto`, `publishPlan`), and the exemption is the more specific claim:
+        it says "whatever the shape suggests, this one is not on the audio path".
+      * otherwise a name in RT_FUNCTION_PATTERNS beats a *shape* in
+        CONTROL_THREAD_FUNCTIONS. `^set[A-Z].*` used to swallow `setTargetGains()` -
+        a two-float setter whose own doc comment says it may be called from the audio
+        thread, and which the real-time list names explicitly. A guess about a family
+        of names does not get to overrule a statement about one.
+    """
+    if not matches_any(name, RT_FUNCTION_PATTERNS):
+        return False
+    if names_exactly(name, CONTROL_THREAD_FUNCTIONS):
+        return False
+    if matches_any(name, CONTROL_THREAD_FUNCTIONS) and not names_exactly(
+        name, RT_FUNCTION_PATTERNS
+    ):
+        return False
+    return True
 
 
 def matches_any(name: str, patterns: list[str]) -> bool:
@@ -354,7 +429,13 @@ def scan_file(repo_root: str, rel_path: str, stats: ScanStats) -> list[Finding]:
     for name, start, end, body in extract_functions(rel_path, text):
         if not matches_any(name, RT_FUNCTION_PATTERNS):
             continue
-        if matches_any(name, CONTROL_THREAD_FUNCTIONS):
+        if not is_audited(name):
+            # Exempt, and recorded rather than silent: an exemption is a decision
+            # somebody made, and sampleInto() and publishPlan() each have their reason
+            # written into CONTROL_THREAD_FUNCTIONS. Printed with the run the way an
+            # annotated allowance is, so coverage can be read off the output instead of
+            # inferred from a count.
+            stats.exemptions.append(f"{rel_path}:{start} ({name})")
             continue
         stats.functions_scanned += 1
         # An allow comment annotates the *statement* that follows it, which may
@@ -378,9 +459,7 @@ def scan_file(repo_root: str, rel_path: str, stats: ScanStats) -> list[Finding]:
                     marking = False
 
     for name, start, end, body in extract_functions(rel_path, text):
-        if not matches_any(name, RT_FUNCTION_PATTERNS):
-            continue
-        if matches_any(name, CONTROL_THREAD_FUNCTIONS):
+        if not is_audited(name):
             continue
         for line_number, code, raw in body:
             if line_number in allowed_lines or not code.strip():
@@ -465,6 +544,8 @@ def main(argv: list[str]) -> int:
             print(f"    {finding.text}", file=stream)
         for entry in stats.allows:
             print(f"allowed (annotated): {entry}")
+        for entry in stats.exemptions:
+            print(f"exempt (control thread by name): {entry}")
         print(
             f"rt_audit: {stats.files_scanned} files, {stats.functions_scanned} audio-thread "
             f"functions scanned -> {len(errors)} error(s), {len(warnings)} warning(s)"

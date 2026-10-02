@@ -388,6 +388,25 @@ public:
     [[nodiscard]] static AuraResult<ArenaView> attach(void* bytes, std::size_t size,
                                                       const ArenaSpec& expected);
 
+    /// Attaches using the spec the peer's own header declares.
+    ///
+    /// This is the helper's situation: the host chooses a session's limits and the
+    /// helper is told nothing but where to look, so it has no independent copy of the
+    /// spec to compare against. Inventing one to pass to the overload above would
+    /// make the comparison meaningless, and requiring the spec on the command line
+    /// would put a second source of truth in a place a stale launch could disagree
+    /// with the mapping.
+    ///
+    /// Trusting an untrusted header is safe here only because the header is then
+    /// proved against the bytes: the magic and the layout version must match this
+    /// build, the declared spec must normalise to something computeLayout() accepts,
+    /// the offsets that spec implies must equal the offsets the header claims, and
+    /// the mapping must be big enough for the result. A header that lies about its
+    /// spec therefore fails on the offsets or the size. There is no spec it could
+    /// declare that this build would misinterpret, which is the property that makes
+    /// the overload acceptable at all. CONTROL THREAD ONLY.
+    [[nodiscard]] static AuraResult<ArenaView> attach(void* bytes, std::size_t size);
+
     [[nodiscard]] bool isValid() const noexcept { return bytes_ != nullptr; }
     [[nodiscard]] std::uint8_t* bytes() const noexcept { return bytes_; }
     [[nodiscard]] std::size_t size() const noexcept { return size_; }

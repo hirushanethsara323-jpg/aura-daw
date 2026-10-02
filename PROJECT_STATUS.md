@@ -12,7 +12,7 @@ Last updated with M7 phase 1 (the sandbox transport).
 | | |
 |---|---|
 | Version | `0.1.0` (development; no release has been shipped) |
-| Milestone | **M7 — Plug-in sandbox + CLAP**, phase 1 of 7 landed |
+| Milestone | **M7 — Plug-in sandbox + CLAP**, phase 2 of 7 landed |
 | Target platform | Windows 10/11 x64; developed and tested on Linux/GCC with MSVC parity enforced by the warning contract |
 | Licence | GPL-3.0-or-later |
 | Default branch | `main` |
@@ -21,20 +21,21 @@ Last updated with M7 phase 1 (the sandbox transport).
 
 | Configuration | State |
 |---|---|
-| `RelWithDebInfo`, GCC 14, Linux | **green** — configures, builds with no warnings, 153/153 `ctest` entries pass |
+| `RelWithDebInfo`, GCC 14, Linux | **green** — configures, builds with no warnings, 165/165 `ctest` entries pass |
 | `-DAURA_WARNINGS_AS_ERRORS=ON` | **green** — the full `/W4 /WX` ↔ `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wunused-parameter` contract |
-| `-DAURA_ENABLE_ALLOC_TRACKING=ON` | **green** — 153/153, and the transport's allocation counter measures **0** over a 2 000-block run |
-| Windows / MSVC (GitHub Actions) | last recorded **green at M6** with 143 entries; the count has moved since (153 now) and CI has not been re-run against this branch on a Windows runner |
+| `-DAURA_ENABLE_ALLOC_TRACKING=ON` | **green** — 165/165 together with `-DAURA_WARNINGS_AS_ERRORS=ON` in one build, 0 warnings, and the transport's allocation counter measures **0** over a 2 000-block run |
+| Windows / MSVC (GitHub Actions) | **green on pull request #13** — run 36994237694, **12 of 12 jobs** at `00f8ea3`: Debug and Release `/W4 /WX`, ASan/UBSan, the VST 3 fixture, fuzzing, clang-tidy, the MinGW cross-check and the soak harness. Phase 2 was merged on the strength of that run, so the run predates this row by one documentation-only commit. `main` was previously verified at `1a88a90` (run 36981136588). Those two Windows runs are the reason phase 2 shipped a fix it would otherwise have missed: MSVC at `/O2` found a data race that no Linux configuration and no MSVC Debug build could see |
 | `-DAURA_ENABLE_VST3=ON` | not exercised in this environment (the SDK is fetched at a pinned tag; needs network and Windows or a Linux bundle layout) |
 
 ## Test status
 
 | Layer | State |
 |---|---|
-| `ctest` | **153 entries, all passing** — 151 Catch2 test cases + 2 static audits |
-| `tools/rt_audit.py` | 60 files, **63 audio-thread functions scanned, 0 errors, 0 warnings**, 1 annotated allowance (`src/midi/Instrument.cpp:250`) |
-| `tools/include_audit.py` | 135 files, **0 findings** |
+| `ctest` | **165 entries, all passing** — 163 Catch2 test cases + 2 static audits |
+| `tools/rt_audit.py` | 68 files, **82 audio-thread functions scanned, 0 errors, 0 warnings**, 1 annotated allowance (`src/midi/Instrument.cpp:250`) and 2 printed exemptions (`sampleInto`, `publishPlan`). Coverage grew from 62 in three steps: the helper's real-time loop was added as a scope, an extractor bug that skipped every `[[nodiscard]]` inline definition was fixed (13 functions), and a real-time name was made to beat a control-thread shape (`setTargetGains`). Every new gate was verified by injecting a violation and confirming the audit catches it — including confirming the two deliberate exemptions are still exempt |
+| `tools/include_audit.py` | 143 files, **0 findings** |
 | Sandbox transport (`[sandbox]`) | 15 cases, 2108 assertions, including a 60 000-block two-thread stress run |
+| Sandbox helper (`[shm]`, `[helper]`) | 12 cases across two files: named shared memory on both platforms, and a **really spawned** `aura_plugin_host` that processes 200 blocks across a process boundary and returns every sample bit-exact, every origin once and in order |
 | Fuzzing | 3 libFuzzer targets in CI + portable `[fuzz]` tests |
 | Soak | `bench/aura_soak` runs 2 minutes in CI; the **8-hour single-take run is still outstanding** (M5's last item) |
 | Open GitHub issues at the time of writing | 1 |
@@ -65,12 +66,17 @@ which test proves which claim.
   chains with order/bypass/latency.
 - **Sandbox transport (M7 phase 1)** — shared-memory arena and one-block-deferred
   audio exchange, tested across two threads.
+- **Sandbox helper process (M7 phase 2)** — named shared memory, a supervisor that
+  starts/watches/kills a long-lived child, and `aura_plugin_host` itself: audio
+  crosses a real process boundary under back-pressure and comes back bit-exact.
+  The helper's real-time loop is audited by `rt_audit.py`, and the helper is
+  format-agnostic — it drives `SandboxProcessor`, not an SDK.
 
 ## Partial
 
 | Area | What exists | What is missing |
 |---|---|---|
-| Out-of-process plug-in sandbox | the transport (arena + rings), 15 tests | **no helper process, no proxy, no crash protocol, no watchdog** — nothing is isolated yet (M7 phases 2–6) |
+| Out-of-process plug-in sandbox | the transport (arena + rings), the named mapping, the supervisor and the helper process, 27 tests | **no caller**: nothing in the engine spawns a helper, so no plug-in is isolated yet. No proxy, no crash protocol, no watchdog, no policy plumbing, no format adapter in the helper (M7 phases 3–7) |
 | CLAP | the option and the format enumerator | no adapter; `hostSupports(PluginFormat::Clap)` returns false |
 | Performance gates | measured and reported in `docs/PERFORMANCE.md` | not *enforced* — that needs a pinned machine |
 | M5 hardening | every gate green | the 8-hour single-take soak |
@@ -88,21 +94,40 @@ which test proves which claim.
 
 ## Known bugs
 
-None that are reproduced, diagnosed and open at the time of writing. Three were found
-and fixed in this increment and each has a regression test: an allocation on the audio
-thread in `Clip::render()`, an extractor fault in `tools/rt_audit.py` that left whole
-translation units unaudited, and a consumer that released a shared-memory slot before
-it had verified what it read. All three are in [`CHANGELOG.md`](CHANGELOG.md).
+None that are reproduced, diagnosed and open at the time of writing. Six were found and
+fixed across M7 and each has a regression test: an allocation on the audio thread in
+`Clip::render()`; an extractor fault in `tools/rt_audit.py` that left whole translation
+units unaudited; a consumer that released a shared-memory slot before it had verified
+what it read; a helper that dropped processed audio when the host was briefly behind
+(fixed by back-pressure); a data race in the transport's seqlock payload that only
+MSVC `/O2` exploited; and two more silent blind spots in `rt_audit.py`. All six are in
+[`CHANGELOG.md`](CHANGELOG.md).
+
+Two of those were found only by CI's Windows jobs and by a pull request run *before*
+the merge, which is the argument for verifying a branch rather than verifying `main`
+after the fact: the data race needed MSVC at `/O2`, and the shared-memory test that
+assumed POSIX `shm_unlink` semantics needed a platform with no unlink.
 
 Documented **limits** that are decisions rather than defects:
 
 - A crashing plug-in still crashes AURA (isolation covers scanning, not playback).
+  The helper process that would change this exists and is tested, but nothing in
+  the engine starts one yet.
 - Only bus 0 of a plug-in is the track; sidechain and aux buses are wired to silence.
 - A mono track feeding a stereo plug-in leaves the second channel silent, with a
   warning logged at `prepare()`.
 - The engine's allocation-counter test does not render a clip from a stream, so a
   per-block allocation down that path would not be caught dynamically — recorded in
   `docs/TESTING.md`'s gap table with the fix.
+- The helper's host-gone detection is a **wall-clock backstop**, not the watchdog:
+  it infers the host is dead from the absence of blocks, because a dead host cannot
+  say so. The real watchdog counts blocks in the host and lands with the crash
+  protocol (phase 4), and a Windows job object with `KILL_ON_JOB_CLOSE` (phase 6)
+  removes the need for the helper to reason about time at all.
+- `request::kSaveState` crosses the boundary and is **acknowledged but refused**:
+  the arena has no state buffer and the helper must not touch the disk from its
+  real-time thread. Wiring it is a `kLayoutVersion` bump that belongs with phase 4,
+  where the saved blob is the crash recovery point.
 
 ## Performance notes
 
@@ -120,10 +145,27 @@ increment rather than assumed:
   `TransportStats::overruns` counts refused pushes, and a caller that retries racks
   them up by design.
 
+One behaviour was found and fixed inside this increment rather than after it: the
+helper's first version **dropped** a processed block whenever the output ring was
+full, and a 200-block test lost two to five blocks depending on scheduling. A
+bounded retry was tried and was worse — any budget short of "wait for the host"
+still drops under load. Back-pressure replaced both: the helper holds one block
+until the host has room. The same test now delivers 200 of 200 with zero lost and
+zero torn. The lesson recorded with it is about the test, not the transport: the
+host side originally yielded in a tight loop while waiting for room, which kept a
+core the helper needed, so the helper fell behind. A test that starves the process
+it is measuring is measuring the test.
+
 ## Next milestone
 
-**M7 phase 2 — the helper process.** `aura_plugin_host` loads one bundle, runs the
-real-time loop against the arena and reports state over the control channel, started
-by a supervisor. Then phase 3: `SandboxedPluginInstance` implementing `PluginInstance`
-so the chain and the engine see no difference. Design, decisions and the remaining
-phases: [`docs/research/PLUGIN_SANDBOX_RESEARCH.md`](docs/research/PLUGIN_SANDBOX_RESEARCH.md).
+**M7 phase 3 — the proxy.** `SandboxedPluginInstance` implements `PluginInstance` on
+top of a helper session, so the chain and therefore the whole engine see no
+difference between a plug-in in this process and one in another: `processBlock()`
+becomes one `exchange()`, latency is reported through `latencyFrames()` for the
+graph to compensate, and a helper that dies leaves the slot dry rather than the
+session silent. That is the phase in which something in AURA finally *spawns* a
+helper, and therefore the phase in which the sandbox starts isolating. Then phase 4:
+the crash and hang protocol — a fixture with a deliberate crash hook, a watchdog
+counting blocks rather than milliseconds, and a restart from the last state blob.
+Design, decisions and the remaining phases:
+[`docs/research/PLUGIN_SANDBOX_RESEARCH.md`](docs/research/PLUGIN_SANDBOX_RESEARCH.md).

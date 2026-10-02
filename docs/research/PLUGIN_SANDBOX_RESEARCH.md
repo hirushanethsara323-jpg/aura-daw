@@ -179,6 +179,53 @@ The host-side extensions AURA implements first: `log`, `thread-check`, `params`,
    definition in a file.
 2. **Helper process** — `aura_plugin_host` loads one bundle, runs the RT loop against
    the arena, and reports state over the control channel; started by the supervisor.
+   — **Landed, with one deliberate deviation.** `tools/plugin_host/PluginHostMain.cpp`,
+   `plugin/sandbox/{ProcessSupervisor,SandboxProcessor,SharedMemory,HelperProtocol}`;
+   12 tests in `tests/plugin/sandbox/SandboxHelperTests.cpp` (`[shm]`, `[helper]`), the
+   end-to-end one asserting 200 blocks cross a real process boundary and come back
+   bit-exact, in order, once each.
+   *It does not load a bundle yet*: the format adapters are phases 6-7, so the helper
+   drives `SandboxProcessor` and ships a deterministic reference processor (gain on
+   parameter 0, notes echoed). That substitution is what makes this phase testable at
+   all — a cross-process audio path that can only be exercised with a real third-party
+   bundle is a path no CI runner ever runs.
+   Three things this phase settled that the design had left open:
+   - **The audio path runs under back-pressure.** The helper holds one processed block
+     until the host has room, instead of dropping it when the output ring is full. The
+     dropping version lost 2-5 blocks in 200 depending on scheduling; a bounded retry
+     was tried and was worse, because any budget short of "wait for the host" still
+     drops under load. Holding costs nothing: the rings are two deep and the host pops
+     before it pushes, which is why `exchange()` is ordered that way. After the change
+     the same test delivers 200 of 200 with zero lost and zero torn.
+   - **`rt_audit.py` scans the helper's loop** (`tools/plugin_host/*.cpp`,
+     `^runHelperLoop$`). The helper's thread is real-time in every sense the engine's
+     callback is, with two deliberate differences: it may *sleep* when idle, because
+     nothing waits on it and spinning would steal the core the host's callback needs;
+     and it may *exit* when the host goes quiet, because a dead host cannot ask it to.
+     The new scope was verified by injecting a `std::vector` into the loop and
+     confirming the audit fails.
+   - **`kSaveState` is acknowledged and refused.** The arena has nowhere to put a blob
+     and this thread must not touch the disk, so wiring state save is a `kLayoutVersion`
+     bump that belongs with phase 4, where the blob is the recovery point and therefore
+     has to be right. The helper clears the request bit without setting `kStateReady`,
+     which is the honest answer.
+   - **A session's shared-memory name must be unique to that session.** POSIX has
+     `shm_unlink`, so a creator's release frees the name at once even while a helper
+     still has the object mapped; Windows has no unlink, so a named section lives
+     until its last handle closes and `create()` on a name a live peer holds reports
+     `AlreadyExists` — correctly, since the alternative is handing back that peer's
+     section. A fixed name would therefore collide on Windows exactly when a previous
+     helper is still alive, which is when a new session is most likely to start. This
+     was not found by reading the platform documentation: a test asserted the POSIX
+     rule unconditionally, passed on Linux for a whole increment, and CI's Windows
+     jobs disagreed with it. The rule is now written down for both platforms in
+     `SharedMemory.hpp` and tested on both. Phase 3's session owns name generation.
+   Also added: `ArenaView::attach(bytes, size)`, which reads the spec from the peer's
+   own header — a helper has no independent copy to compare against, and putting the
+   spec on the command line would create a second source of truth that a stale launch
+   could disagree with the mapping. It is safe because the header is then proved
+   against the bytes (magic, version, a spec that normalises, offsets that match what
+   the spec implies, a mapping big enough), and four tests lie about each of those.
 3. **Proxy** — `SandboxedPluginInstance` implements `PluginInstance`; the chain and
    therefore the whole engine see no difference. Tests: audio equals the in-process
    result within the compensated block, parameters and notes cross, state round-trips.

@@ -286,9 +286,9 @@ live in the per-topic documents in this folder; this file is the index of record
 
 ## ADR-0017 — The sandbox transport's identity and ordering are explicit, not inferred
 
-* **Accepted.** Three things the M7 design assumed turned out to be wrong, and all
+* **Accepted.** Four things the M7 design assumed turned out to be wrong. The first
   three were found by the transport's own two-thread test rather than by reading the
-  code.
+  code; the fourth was found by a Windows Release runner, and only there.
   1. **A block's identity travels with the block.** `AudioSlotHeader` carries an
      `origin` field: the producer's own absolute block number. The consumer compares
      it against what it expects and reports `inconsistent`/`outOfOrder` rather than
@@ -297,6 +297,10 @@ live in the per-topic documents in this folder; this file is the index of record
      reader's accesses to `ControlBlock::transportVersion` are `seq_cst`.
   3. **A consumer finishes verifying a slot before it releases it.** The reader's
      re-check of a slot's sequence happens before it advances `consumed`.
+  4. **The seqlock's payload is copied word by word through relaxed atomics.**
+     `copySnapshotFrom()` and `copySnapshotTo()` in `src/plugin/sandbox/SandboxArena.cpp`
+     move `TransportSnapshot` as six 8-byte `std::atomic_ref` accesses, never as a
+     struct assignment.
 * **Why:**
   * *The index is not a tag.* The design's pipeline diagram implies the consumer can
     work out which block a slot holds from where the ring has got to. After **any**
@@ -312,6 +316,18 @@ live in the per-topic documents in this folder; this file is the index of record
     an old, even version. x86-64 TSO forbids it, so the bug is invisible on the machine
     it was written on and live on ARM. Correctness-by-ISA is not acceptable in a
     boundary whose entire purpose is surviving a peer that misbehaves.
+  * *Ordering the version word does not make the payload copy safe.* Item 2 fixed the
+    fences and left `control->transport = snapshot` — a plain struct assignment racing
+    with a plain struct write, which is a data race and therefore undefined behaviour.
+    UB is a licence, not a formality: MSVC at `/O2` appears to have
+    common-subexpression-eliminated the reader's copy across its retry loop, so a
+    payload torn on attempt 0 was reused on attempt 1 and accepted under a version that
+    matched. CI's Windows Release job caught **one such read in 112 026**, on a
+    transport that had passed every Linux configuration and every MSVC Debug build —
+    including the two-thread test that found the other three. Relaxed word accesses
+    remove the race and therefore the licence, and cost nothing: 48 bytes is six
+    lock-free words, and the ordering that makes the result consistent still comes from
+    the `seq_cst` version word, not from these loads.
   * *Releasing first fabricates tears.* The reader stored `consumed` and *then*
     re-checked the sequence. The producer, correctly, took the slot the instant
     `consumed` moved and stamped it with the next block's sequence — so the re-check
@@ -322,8 +338,15 @@ live in the per-topic documents in this folder; this file is the index of record
 * **Rejected:** inferring block numbers from ring indices; a `release`/`acquire` seqlock
   (plus `std::atomic_thread_fence(acq_rel)`, which orders the fences but still leaves the
   reader's second load free to move relative to the payload); reporting `Torn` without
-  zeroing the destination (half of two different blocks is not audio); and treating an
-  occasional lost block as acceptable because a retry loop hides it.
+  zeroing the destination (half of two different blocks is not audio); treating an
+  occasional lost block as acceptable because a retry loop hides it; a plain struct
+  assignment for the payload (a data race, and one an optimiser exploited); and
+  `std::atomic_ref<TransportSnapshot>` for the whole struct, which is race-free but not
+  lock-free at 48 bytes and would put a mutex on the audio path to remove a race from
+  it. Also rejected: growing the snapshot to a word multiple to make the copy possible.
+  It already is one, which is asserted at the copy rather than assumed, so a future
+  field that breaks it fails the build instead of silently leaving bytes outside the
+  seqlock.
 * **Consequences:** `seq_cst` on one word per transport exchange is a `mfence`-class cost
   on x86 and is worth it — it is once per block, not once per sample. The rule generalises
   and is written into the header: **a consumer may not release a slot until it has
