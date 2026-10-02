@@ -70,6 +70,10 @@ RT_SCOPE_GLOBS = [
     "src/transport/Transport.cpp",
     "src/audioio/WasapiDevice.cpp",
     "src/audioio/AsioDevice.cpp",
+    # M7: the sandbox transport is on the audio path by definition - the host's
+    # push/pop pair is called from inside the device callback, once per block.
+    "include/aura/plugin/sandbox/*.hpp",
+    "src/plugin/sandbox/*.cpp",
 ]
 
 # Function names (matched on the identifier before the opening parenthesis) that
@@ -83,6 +87,12 @@ RT_FUNCTION_PATTERNS = [
     r"^noteOn$", r"^noteOff$", r"^snapTo$", r"^applyMixerStateToGraph$",
     r"^drain$", r"^renderClips$", r"^renderInstruments$", r"^renderRecording$",
     r"^callback$", r"^onAudio.*",
+    # Lock-free boundary crossings: a queue's push/pop run on whichever side of the
+    # boundary the caller is on, and for the sandbox transport that side is the
+    # audio thread. Named explicitly rather than as "^write$/^read$" so the audit
+    # reads like the contract it enforces.
+    r"^push$", r"^pop$", r"^push[A-Z].*", r"^pop[A-Z].*",
+    r"^exchange$", r"^publish.*",
 ]
 
 # Functions that look like they are in scope but are documented control-thread
@@ -93,6 +103,13 @@ CONTROL_THREAD_FUNCTIONS = [
     r"^set[A-Z].*", r"^configure.*", r"^load.*", r"^save.*", r"^scan.*",
     r"^enumerate.*", r"^start$", r"^stop$", r"^shutdown$", r"^rebuild.*",
     r"^applyDelayCompensation$",
+    # The control-thread half of rebuildGraph(): it swaps the plan pointer and
+    # retires the old one into a vector, which is exactly what the audio thread may
+    # not do. Its header states the contract ("Call this only from the control
+    # thread") and the audio thread reaches the plan through a bare atomic pointer
+    # instead. Added when ^publish.* joined the RT patterns, which had left this
+    # function unaudited until then - it is control-thread, not a violation.
+    r"^publishPlan$",
     # Lane::sampleInto() fills a caller-owned std::vector for the UI to draw and for
     # the offline renderer to pre-compute a curve - it reserves and push_backs, which
     # no audio-thread function may do, and its only caller in the tree is a test.

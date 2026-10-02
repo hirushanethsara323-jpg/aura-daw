@@ -26,6 +26,7 @@ file on disk to the speakers. Decisions behind this shape are in
    │  project/     Project · MediaPool · Autosave · recovery          │
    │  commands/    ids · CommandRegistry · UndoHistory · edits        │
    │  plugin/      PluginHost surface · PluginDatabase · PluginChain  │
+   │               sandbox/ SharedArena + audio rings (M7 transport)  │
    └──────────────────────────────────────────────────────────────────┘
                   │  blocks of float, planar
                   ▼

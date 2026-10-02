@@ -10,6 +10,12 @@ the tree that knows a plug-in format exists: no SDK type appears in the engine, 
 mixer or the UI. Everything a plug-in is, from the rest of AURA's point of view, is
 one of the types in the table below.
 
+That claim is worth stating precisely now that `include/aura/plugin/sandbox/` shares
+the directory. The sandbox headers are **format-agnostic on purpose**: they move
+blocks of `float`, parameter records and note records across a shared mapping and
+never name an SDK, a bundle or an entry point. A helper process will eventually load
+a real bundle, and it will do so *behind* this boundary, not through it.
+
 ## What this build can host
 
 | Format | State | How it is decided |
@@ -80,7 +86,7 @@ What that does, and why:
 | **VST 3 loading: parameters, latency, audio, events, state round trip** | **implemented + tested against a real bundle** |
 | CLAP instantiation | not written |
 | Editor *window* embedding | not built; `createEditor()` returns the plug-in's own view handle and the shell owns it (M9/M10). A generic parameter list is the fallback |
-| Out-of-process **audio** sandbox | not built - see the honest limitation below |
+| Out-of-process **audio** sandbox | **transport built, no helper process yet** (M7 phase 1) - see the honest limitation below |
 
 ## Scanning
 
@@ -204,6 +210,14 @@ turn a glitch into a stutter. The chain skips bypassed and failed slots, and
   helper process is a matter of replacing the transport (shared memory + IPC) instead
   of rewriting the mixer. A DAW that claims sandboxing it does not have is worse than
   one that admits the gap.
+  **What has been built:** that transport. `include/aura/plugin/sandbox/` holds
+  `SandboxArena` (a fixed layout whose every region is an *offset* from the mapping
+  base, so the engine and a helper may map it at different addresses) and
+  `SharedAudioRing` (a one-block-deferred audio exchange, plus parameter, note-in and
+  note-out rings, a control block and a telemetry block). It is 15 tests deep and has
+  no caller: nothing spawns a helper, so nothing is isolated yet. The crash protocol,
+  the watchdog and the helper itself are M7 phases 2-6 in
+  [`research/PLUGIN_SANDBOX_RESEARCH.md`](research/PLUGIN_SANDBOX_RESEARCH.md).
 * **Only bus 0 of the plug-in is the track.** Sidechain and aux buses are wired to
   silence, not routed: the graph has no sidechain send yet (M7/M8). A plug-in with a
   sidechain input will therefore hold its detector at silence instead of opening.

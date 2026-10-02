@@ -87,6 +87,7 @@ add_executable(aura_tests
   timeline/TimelineTests.cpp
   plugin/PluginTests.cpp
   plugin/ChildProcessTests.cpp
+  plugin/sandbox/SandboxTransportTests.cpp
 )
 target_link_libraries(aura_tests PRIVATE Aura::Engine Aura::Dsp Aura::Core aura_test_support)
 
