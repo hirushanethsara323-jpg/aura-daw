@@ -16,13 +16,13 @@ python3 tools/rt_audit.py .                    # the static RT audit, by hand
 ```
 
 `ctest` runs **165 entries**: 163 Catch2 test cases plus two static-analysis tests
-(`rt_audit` and `include_audit`). Current status: all passing on Linux/GCC 14, also
-with `-DAURA_WARNINGS_AS_ERRORS=ON` and with `-DAURA_ENABLE_ALLOC_TRACKING=ON`. On
-Windows/MSVC the suite is green in GitHub Actions at `main` — 12 of 12 jobs, which
-covers Debug and Release `/W4 /WX`, ASan/UBSan, the VST 3 fixture, fuzzing and
-clang-tidy. The count has moved a long way since M6's 143: the sandbox transport
-added 15 cases, `Clip::render`'s regression one, named shared memory 5 and the
-helper process 7.
+(`rt_audit` and `include_audit`). Current status: all passing on Linux/GCC 14, also with
+`-DAURA_WARNINGS_AS_ERRORS=ON` and with `-DAURA_ENABLE_ALLOC_TRACKING=ON`. On
+Windows/MSVC the suite is green in GitHub Actions — 12 of 12 jobs, covering Debug and
+Release `/W4 /WX`, ASan/UBSan, the VST 3 fixture, fuzzing and clang-tidy;
+`PROJECT_STATUS.md` at the repository root carries the run references. The count has
+moved a long way since M6's 143: the sandbox transport added 15 cases, `Clip::render`'s
+regression one, named shared memory 5 and the helper process 7.
 
 ## The layers
 

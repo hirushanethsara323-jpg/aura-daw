@@ -24,7 +24,7 @@ Last updated with M7 phase 1 (the sandbox transport).
 | `RelWithDebInfo`, GCC 14, Linux | **green** — configures, builds with no warnings, 165/165 `ctest` entries pass |
 | `-DAURA_WARNINGS_AS_ERRORS=ON` | **green** — the full `/W4 /WX` ↔ `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wunused-parameter` contract |
 | `-DAURA_ENABLE_ALLOC_TRACKING=ON` | **green** — 165/165 together with `-DAURA_WARNINGS_AS_ERRORS=ON` in one build, 0 warnings, and the transport's allocation counter measures **0** over a 2 000-block run |
-| Windows / MSVC (GitHub Actions) | **green at `main` = `1a88a90`** (M7 phase 1): run 36981136588, **12 of 12 jobs** — Debug and Release `/W4 /WX`, ASan/UBSan, the VST 3 fixture, fuzzing, clang-tidy, MinGW cross-check and the soak harness. Phase 2 is verified locally on Linux/GCC and goes through CI on its pull request before it merges |
+| Windows / MSVC (GitHub Actions) | **green on pull request #13** — run 36994237694, **12 of 12 jobs** at `00f8ea3`: Debug and Release `/W4 /WX`, ASan/UBSan, the VST 3 fixture, fuzzing, clang-tidy, the MinGW cross-check and the soak harness. Phase 2 was merged on the strength of that run, so the run predates this row by one documentation-only commit. `main` was previously verified at `1a88a90` (run 36981136588). Those two Windows runs are the reason phase 2 shipped a fix it would otherwise have missed: MSVC at `/O2` found a data race that no Linux configuration and no MSVC Debug build could see |
 | `-DAURA_ENABLE_VST3=ON` | not exercised in this environment (the SDK is fetched at a pinned tag; needs network and Windows or a Linux bundle layout) |
 
 ## Test status
