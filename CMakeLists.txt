@@ -200,6 +200,7 @@ add_library(aura_engine STATIC
   src/plugin/ChildProcess.cpp
   src/plugin/sandbox/SandboxArena.cpp
   src/plugin/sandbox/SharedAudioRing.cpp
+  src/plugin/sandbox/SharedMemory.cpp
   src/automation/Automation.cpp
   src/timeline/Timeline.cpp
   src/engine/AudioEngine.cpp
@@ -219,6 +220,16 @@ if(WIN32)
   # winmm - waveOut-style fallback and the timer resolution calls in the clock
   # (uuid is not needed: every IID is resolved at compile time through __uuidof.)
   target_link_libraries(aura_engine PRIVATE ole32 avrt winmm)
+elseif(UNIX)
+  # shm_open/shm_unlink (the sandbox's named mapping) live in librt on glibc
+  # before 2.34 and in libc since. Linked only where the platform still needs it,
+  # so a modern toolchain does not grow a dependency for a symbol it already has,
+  # and an older one does not fail to link the sandbox.
+  include(CheckLibraryExists)
+  check_library_exists(rt shm_open "" AURA_NEEDS_LIBRT)
+  if(AURA_NEEDS_LIBRT)
+    target_link_libraries(aura_engine PRIVATE rt)
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
