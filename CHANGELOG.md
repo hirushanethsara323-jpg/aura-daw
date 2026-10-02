@@ -105,6 +105,42 @@ written down here did not land.
 
 ### Fixed
 
+- **The transport's seqlock payload was a data race, and MSVC `/O2` took the
+  licence.** `publishTransportSnapshot()` wrote `control->transport = snapshot` and
+  `readTransportSnapshot()` read it back the same way: a plain struct assignment
+  racing with a plain struct write, which is undefined behaviour regardless of how
+  carefully the version word is ordered. ADR-0017 had already fixed the *ordering*
+  of that version word and left the payload alone. CI's Windows Release job caught
+  the consequence — one read in 112 026 accepted a payload torn across two
+  snapshots, on a transport that had passed every Linux configuration and every
+  MSVC Debug build before it. The likely mechanism is common-subexpression
+  elimination across the reader's retry loop: a copy torn on attempt 0 reused on
+  attempt 1 and accepted under a version that matched. Both sides now copy the
+  snapshot word by word through `std::atomic_ref<std::uint64_t>` with
+  `memory_order_relaxed` — race-free, lock-free, and still ordered by the `seq_cst`
+  version word rather than by these accesses. `std::atomic_ref<TransportSnapshot>`
+  was rejected: a 48-byte `atomic_ref` is not lock-free, so it would have put a
+  mutex on the audio path to fix a race. No layout change — the snapshot is already
+  48 bytes on an 8-byte boundary, asserted rather than assumed, so `kLayoutVersion`
+  stays at 1. Tests: the tearing case 30 consecutive runs, the two-thread
+  60 000-block stress case 12, both clean.
+- **`tools/rt_audit.py` had two more silent blind spots.** (1) Its
+  `function_name_from_signature()` rejected any signature containing `[` before the
+  parameter list — a lambda test that also rejected `[[nodiscard]]`, so every
+  inline definition written with a leading attribute was skipped. Thirteen
+  real-time functions across the DSP, graph and sandbox headers were being counted
+  as audited by nothing. (2) Its two passes over a file made the audit-or-exempt
+  decision *separately* and could disagree, so a function could be counted as
+  scanned by the first pass and skipped by the second — reporting coverage the
+  audit did not have. The decision is now one function used by both passes,
+  attributes are stripped before anything inspects the text, and a name in the
+  real-time list beats a *shape* in the control-thread list (`^set[A-Z].*` had been
+  swallowing `setTargetGains()`, a two-float setter whose own doc comment says it
+  may be called from the audio thread). Exemptions are now printed with the run
+  rather than applied silently, so coverage is read off the output instead of
+  inferred from a count: 62 → 82 functions. Both fixes were found the same way —
+  inject a violation into a function that was supposed to be gated and watch
+  whether the audit notices.
 - **`Clip::render()` allocated on the audio thread.** It built a
   `std::vector<float*>` of per-channel write pointers on every call — roughly 24
   heap round trips every 2.7 ms in a 24-track session at 128 frames. Replaced with

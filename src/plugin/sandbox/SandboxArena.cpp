@@ -8,10 +8,13 @@
 // ============================================================================
 #include "aura/plugin/sandbox/SandboxArena.hpp"
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <new>
 #include <string>
+#include <type_traits>
 
 #include "aura/core/Math.hpp"
 #include "aura/core/Strings.hpp"
@@ -66,6 +69,74 @@ constexpr std::uint32_t kMaxChannels = 64u;
 
 [[nodiscard]] bool isAlignedBase(const void* bytes) noexcept {
     return (reinterpret_cast<std::uintptr_t>(bytes) % kCacheLine) == 0u;
+}
+
+
+// ---------------------------------------------------------------------------
+// The transport snapshot crosses word by word, through relaxed atomics.
+//
+// It travels inside a seqlock: the writer bumps a version word to odd, writes the
+// payload, bumps it to even; the reader brackets a copy with two version reads and
+// rejects the copy when they differ. The version word is `memory_order_seq_cst` -
+// see ADR-0017 for why release/acquire is not enough - and that ordering is what
+// makes a copy taken between two equal versions a consistent one.
+//
+// Copying the payload with `=` is not part of that argument, and was the bug. A
+// plain struct assignment racing with a plain struct write is a data race, and a
+// data race is undefined behaviour - which is a licence, not a formality. MSVC at
+// /O2 took it: it common-subexpression-eliminated the reader's copy across the
+// retry loop, so a payload torn on attempt 0 could be reused on attempt 1 and
+// accepted under a version that matched. CI's Windows Release job found exactly one
+// such read in 112 026, on a transport that had passed every Linux configuration
+// and every MSVC Debug build before it. Relaxed atomics remove the race and
+// therefore the licence.
+//
+// Relaxed is the correct order precisely because the ordering lives in the version
+// word: acquire or release here would add barriers that buy nothing. And word-wise
+// is real-time safe where `std::atomic_ref<TransportSnapshot>` would not be - a
+// 48-byte atomic_ref is not lock-free, so it would put a mutex on the audio path to
+// fix a race. Six 8-byte words are lock-free on every platform AURA builds for.
+//
+// The snapshot has to be a whole number of words for this to be honest, so that is
+// asserted rather than assumed: a struct that grew a trailing uint32_t would
+// silently leave four bytes outside the copy, and the seqlock would keep reporting
+// the result as consistent.
+constexpr std::size_t kSnapshotWords = sizeof(TransportSnapshot) / sizeof(std::uint64_t);
+
+static_assert(sizeof(TransportSnapshot) % sizeof(std::uint64_t) == 0,
+              "the snapshot is copied word by word, so it must be a whole number of words");
+static_assert(alignof(TransportSnapshot) % alignof(std::uint64_t) == 0,
+              "std::atomic_ref requires its object to be suitably aligned");
+static_assert(std::is_trivially_copyable_v<TransportSnapshot>,
+              "copied as raw words, so it cannot own anything");
+static_assert(std::is_standard_layout_v<ControlBlock>, "offsetof below is only defined for it");
+static_assert(offsetof(ControlBlock, transport) % alignof(std::uint64_t) == 0,
+              "the snapshot must start on a word boundary to be copied through atomic_ref");
+
+/// RT-safe. Reads a snapshot that a peer may be writing.
+///
+/// Named `copySnapshotFrom` and not `loadSnapshotWords`: `^load.*` is in
+/// rt_audit.py's CONTROL_THREAD_FUNCTIONS, so a name starting with "load" is
+/// exempted from the audit by prefix, and this function would have been scanned by
+/// nothing at all while looking like it was covered. The audit now reports that
+/// contradiction as an error rather than letting a prefix decide silently.
+[[nodiscard]] TransportSnapshot copySnapshotFrom(const TransportSnapshot& source) noexcept {
+    std::uint64_t words[kSnapshotWords];
+    const auto* base = reinterpret_cast<const std::uint64_t*>(&source);
+    for (std::size_t i = 0; i < kSnapshotWords; ++i)
+        words[i] = std::atomic_ref<const std::uint64_t>(base[i]).load(std::memory_order_relaxed);
+    TransportSnapshot out{};
+    std::memcpy(&out, words, sizeof(TransportSnapshot));
+    return out;
+}
+
+/// RT-safe. Writes a snapshot under the seqlock's odd version.
+void copySnapshotTo(TransportSnapshot& destination, const TransportSnapshot& source) noexcept {
+    std::uint64_t words[kSnapshotWords];
+    std::memcpy(words, &source, sizeof(TransportSnapshot));
+    auto* base = reinterpret_cast<std::uint64_t*>(&destination);
+    for (std::size_t i = 0; i < kSnapshotWords; ++i)
+        std::atomic_ref<std::uint64_t>(base[i]).store(words[i], std::memory_order_relaxed);
 }
 
 } // namespace
@@ -387,7 +458,7 @@ void publishTransportSnapshot(ControlBlock* control, const TransportSnapshot& sn
         return;
     const std::uint32_t version = control->transportVersion.load(std::memory_order_relaxed);
     control->transportVersion.store(version + 1u, std::memory_order_seq_cst); // odd: writing
-    control->transport = snapshot;
+    copySnapshotTo(control->transport, snapshot);
     control->transportVersion.store(version + 2u, std::memory_order_seq_cst); // even: stable
 }
 
@@ -410,7 +481,7 @@ bool readTransportSnapshot(const ControlBlock* control, TransportSnapshot& out, 
             break;
         if ((before & 1u) != 0u)
             continue; // mid-write
-        TransportSnapshot candidate = control->transport;
+        const TransportSnapshot candidate = copySnapshotFrom(control->transport);
         const std::uint32_t after = control->transportVersion.load(std::memory_order_seq_cst);
         if (after == before) {
             out = candidate;

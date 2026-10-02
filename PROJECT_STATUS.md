@@ -32,7 +32,7 @@ Last updated with M7 phase 1 (the sandbox transport).
 | Layer | State |
 |---|---|
 | `ctest` | **165 entries, all passing** — 163 Catch2 test cases + 2 static audits |
-| `tools/rt_audit.py` | 68 files, **65 audio-thread functions scanned, 0 errors, 0 warnings**, 1 annotated allowance (`src/midi/Instrument.cpp:250`). Now includes the plug-in helper's real-time loop (`tools/plugin_host/*.cpp`, `^runHelperLoop$`) — a scope verified by injecting a `std::vector` into that loop, confirming the audit fails, and reverting |
+| `tools/rt_audit.py` | 68 files, **82 audio-thread functions scanned, 0 errors, 0 warnings**, 1 annotated allowance (`src/midi/Instrument.cpp:250`) and 2 printed exemptions (`sampleInto`, `publishPlan`). Coverage grew from 62 in three steps: the helper's real-time loop was added as a scope, an extractor bug that skipped every `[[nodiscard]]` inline definition was fixed (13 functions), and a real-time name was made to beat a control-thread shape (`setTargetGains`). Every new gate was verified by injecting a violation and confirming the audit catches it — including confirming the two deliberate exemptions are still exempt |
 | `tools/include_audit.py` | 143 files, **0 findings** |
 | Sandbox transport (`[sandbox]`) | 15 cases, 2108 assertions, including a 60 000-block two-thread stress run |
 | Sandbox helper (`[shm]`, `[helper]`) | 12 cases across two files: named shared memory on both platforms, and a **really spawned** `aura_plugin_host` that processes 200 blocks across a process boundary and returns every sample bit-exact, every origin once and in order |
@@ -94,11 +94,19 @@ which test proves which claim.
 
 ## Known bugs
 
-None that are reproduced, diagnosed and open at the time of writing. Three were found
-and fixed in this increment and each has a regression test: an allocation on the audio
-thread in `Clip::render()`, an extractor fault in `tools/rt_audit.py` that left whole
-translation units unaudited, and a consumer that released a shared-memory slot before
-it had verified what it read. All three are in [`CHANGELOG.md`](CHANGELOG.md).
+None that are reproduced, diagnosed and open at the time of writing. Six were found and
+fixed across M7 and each has a regression test: an allocation on the audio thread in
+`Clip::render()`; an extractor fault in `tools/rt_audit.py` that left whole translation
+units unaudited; a consumer that released a shared-memory slot before it had verified
+what it read; a helper that dropped processed audio when the host was briefly behind
+(fixed by back-pressure); a data race in the transport's seqlock payload that only
+MSVC `/O2` exploited; and two more silent blind spots in `rt_audit.py`. All six are in
+[`CHANGELOG.md`](CHANGELOG.md).
+
+Two of those were found only by CI's Windows jobs and by a pull request run *before*
+the merge, which is the argument for verifying a branch rather than verifying `main`
+after the fact: the data race needed MSVC at `/O2`, and the shared-memory test that
+assumed POSIX `shm_unlink` semantics needed a platform with no unlink.
 
 Documented **limits** that are decisions rather than defects:
 

@@ -811,6 +811,16 @@ TEST_CASE("The transport snapshot crosses without tearing", "[plugin][sandbox]")
     // ever happened" - the retries exist precisely because they do - but "no torn
     // read was ever ACCEPTED", and that the reader's attempts are bounded so a peer
     // cannot make it spin.
+    //
+    // This was a bug: `inconsistent` was 1 in 112 026 reads on MSVC at /O2, and 0
+    // everywhere else - every Linux configuration and every MSVC Debug build. The
+    // payload was crossing as a plain struct assignment, which races with the
+    // writer's plain struct write, and a data race is undefined behaviour: the
+    // optimiser appears to have common-subexpression-eliminated the copy across the
+    // retry loop below, so a payload torn on one attempt was reused on the next and
+    // accepted under a version that matched. The snapshot now crosses word by word
+    // through relaxed atomics (see ADR-0017 item 4). The case is unchanged, because
+    // the case was right - it is the only reason this was ever found.
     std::atomic<bool> writerDone{false};
     std::atomic<std::int64_t> accepted{0};
     std::atomic<std::int64_t> refused{0};
