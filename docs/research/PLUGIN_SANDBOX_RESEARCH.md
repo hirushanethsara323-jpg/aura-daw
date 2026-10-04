@@ -255,7 +255,17 @@ The host-side extensions AURA implements first: `log`, `thread-check`, `params`,
      gets measured is the test runner's loop. One block per millisecond is inside every
      block period AURA supports and outside the helper's 200 µs idle reaction, which
      came down from 1 ms for that reason - the sleep is the helper's worst-case
-     reaction time, and 1 ms against a 2.7 ms block is a third of the budget.
+     reaction time, and 1 ms against a 2.7 ms block is a third of the budget. Pacing
+     alone was not enough on the Windows runners, so the cases also retry a block until
+     the proxy has published it: a dropped input shifts the deferral by one for the
+     rest of the run, and every later comparison is then against the wrong index. Each
+     returned block is *classified* rather than assumed - dry, delay n, silent from a
+     discarded torn read, or corrupt - so a scheduling fact is never reported as a
+     transport bug and a transport bug is never excused as scheduling. Two of the four
+     Windows failures this caused were the test's own off-by-one: the priming loop
+     breaks on the block it just fed, so measuring from that index feeds it twice and
+     the second call returns its own output, which reads as a delay of 0 where 1 was
+     expected. It was found by printing the samples, not by reading the loop.
    Still deferred, deliberately: the proxy reports no editor (it stays in the helper
    and needs the shell, M9/M10), `isActive()` is always false (whether a plug-in is
    still producing a tail is something only the plug-in knows, and `Telemetry` has a

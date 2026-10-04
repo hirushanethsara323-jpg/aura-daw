@@ -108,7 +108,7 @@ void fillBlock(test::Block& block, std::int64_t index) {
     }
 }
 
-bool blockEquals(const test::Block& block, std::int64_t index, float gain) noexcept {
+bool blockEqualsGain(const test::Block& block, std::int64_t index, float gain) noexcept {
     for (int channel = 0; channel < kChannels; ++channel) {
         for (int frame = 0; frame < kBlockSize; ++frame) {
             const float expected = signalAt(index, channel, frame) * gain;
@@ -122,7 +122,7 @@ bool blockEquals(const test::Block& block, std::int64_t index, float gain) noexc
 }
 
 bool blockIsDry(const test::Block& block, std::int64_t index) noexcept {
-    return blockEquals(block, index, 1.0f);
+    return blockEqualsGain(block, index, 1.0f);
 }
 
 /// Makes a proxy and prepares it, failing the case loudly if it could not start.
@@ -140,32 +140,63 @@ std::unique_ptr<SandboxedPluginInstance> makePrepared(ProxyConfig config) {
     return instance;
 }
 
-/// Feeds blocks until the returned audio shows a parameter change has landed.
+/// What one process() call handed back, in blocks of delay.
 ///
-/// A parameter is published the moment it is set, and the helper drains parameters
-/// before it pops a block - so it lands within a block or two, but *which* block is
-/// a scheduling fact and not a protocol one. Pumping until it is visible keeps the
-/// assertions that follow about the transport rather than about the runner.
-template <typename Action>
-bool pumpUntil(SandboxedPluginInstance& instance, Action&& action, int maxBlocks) {
-    test::Block in(kChannels, kBlockSize);
-    std::vector<midi::Message> midiBuffer;
-    for (int block = 0; block < maxBlocks; ++block) {
-        fillBlock(in, block);
-        auto view = in.view(kBlockSize);
-        int midiOut = 0;
-        midi::Message midiOutput[kChainMidiOutCapacity];
-        int activeMidi = 0;
-        instance.process(view, contextAt(block), midiBuffer.data(), activeMidi, midiOutput,
-                         midiOut);
-        std::this_thread::sleep_for(kBlockPace);
-        // The action sees the block index too, because what comes back belongs to the
-        // PREVIOUS block - a predicate that compares against the block just fed in is
-        // true for the wrong reason on every call but the first.
-        if (action(block, view))
-            return true;
+/// Classified rather than assumed, because "the block from one call ago" is only true
+/// while nothing has been dropped - and a test that asserts it blindly reports a
+/// scheduling fact as a transport bug. 0 is the input passed through untouched (dry),
+/// a positive N is the block fed N calls ago processed at the expected gain, and -1 is
+/// neither, which is the only value that means something is actually wrong.
+/// An all-zero block. The ring writes one when it discards a torn read, on purpose:
+/// half of two different blocks is not audio. Named separately so the test can tell
+/// "the transport protected us" from "the transport returned something wrong".
+bool blockIsSilent(const test::Block& block) noexcept {
+    for (const auto& channel : block.channels) {
+        for (const float sample : channel) {
+            if (sample != 0.0f)
+                return false;
+        }
     }
-    return false;
+    return true;
+}
+
+/// -2 means silent, which is what a discarded torn read leaves behind.
+int classifyReturned(const test::Block& block, int fed, float gain) noexcept {
+    if (blockIsSilent(block))
+        return -2;
+    if (blockIsDry(block, fed))
+        return 0;
+    for (int delay = 1; delay <= 8; ++delay) {
+        if (fed - delay < 0)
+            break;
+        if (blockEqualsGain(block, fed - delay, gain))
+            return delay;
+    }
+    return -1;
+}
+
+/// Feeds one block, retrying until the proxy publishes it, and reports what came back.
+///
+/// A real host never retries: the device clock gives the helper a whole block period
+/// and the helper's work is microseconds. A test loop gives it nothing, so the host
+/// outruns a peer in another process that has not been scheduled yet, a push is
+/// refused, an input is dropped - and from then on the one-block deferral is off by
+/// one for the rest of the run. That is the test measuring its own runner. Retrying
+/// until the block is published is the test emulating the clock it does not have.
+template <typename Process>
+int feedBlock(SandboxedPluginInstance& proxy, Process&& process, int block, float gain,
+              int& retries) {
+    test::Block in(kChannels, kBlockSize);
+    for (int attempt = 0; attempt < 4000; ++attempt) {
+        const std::uint64_t publishedBefore = proxy.blocksPublished();
+        fillBlock(in, block);
+        process(in, block);
+        if (proxy.blocksPublished() > publishedBefore)
+            return classifyReturned(in, block, gain);
+        ++retries;
+        std::this_thread::sleep_for(kBlockPace);
+    }
+    return classifyReturned(in, block, gain);
 }
 
 bool processExists(std::uint64_t pid) noexcept {
@@ -206,57 +237,86 @@ TEST_CASE("A sandboxed slot returns the processor's audio one block later",
     CHECK(instance->parameterValue(0) == 1.0f);
     instance->setParameterNormalised(0, kQuarterTurn);
 
-    // Prime the pipeline, then measure. Block numbers run CONTIGUOUSLY through both
-    // phases, because the assertion is "what comes back is the block fed in last
-    // time" - and jumping the index between phases breaks that relationship in the
-    // test rather than in the transport. The first version of this case started
-    // measuring at block 100 after priming at block 3, and its first measured block
-    // was wrong for exactly that reason.
-    test::Block in(kChannels, kBlockSize);
+    // Prime the pipeline, then measure. Every block is retried until the proxy has
+    // published it - see feedBlock() for why - so no input is dropped and the
+    // one-block deferral holds for the whole run instead of drifting the first time
+    // the runner outruns a peer in another process.
     std::vector<midi::Message> midiBuffer;
-    int wrong = 0;
-    int dryInsteadOfProcessed = 0;
+    auto feed = [&](test::Block& in, int block) {
+        auto view = in.view(kBlockSize);
+        int midiOut = 0;
+        midi::Message midiOutput[kChainMidiOutCapacity];
+        int activeMidi = 0;
+        instance->process(view, contextAt(block), midiBuffer.data(), activeMidi, midiOutput,
+                          midiOut);
+        std::this_thread::sleep_for(kBlockPace);
+    };
+
+    int retries = 0;
     int block = 0;
-    bool aligned = false;
-
-    for (; block < 60 && !aligned; ++block) {
-        fillBlock(in, block);
-        auto view = in.view(kBlockSize);
-        int midiOut = 0;
-        midi::Message midiOutput[kChainMidiOutCapacity];
-        int activeMidi = 0;
-        instance->process(view, contextAt(block), midiBuffer.data(), activeMidi, midiOutput,
-                          midiOut);
-        std::this_thread::sleep_for(kBlockPace);
-        aligned = block > 0 && blockEquals(in, block - 1, kHalfGain);
+    int delay = -1;
+    for (; block < 80; ++block) {
+        delay = feedBlock(*instance, feed, block, kHalfGain, retries);
+        INFO("block " << block << " came back with delay " << delay);
+        REQUIRE(delay >= 0); // dry or correctly processed; never corrupt
+        if (delay == 1)
+            break;
     }
-    INFO("blocks fed before the parameter change came back: " << block);
-    REQUIRE(aligned);
+    INFO("blocks fed before the pipeline settled: " << block << ", push retries: " << retries);
+    REQUIRE(delay == 1);
+    // The priming loop breaks with `block` still pointing at the block it just fed, so
+    // measurement has to start at the next one. Feeding the same index twice is not a
+    // harmless repeat: the second call returns that block's own output, which reads as
+    // a delay of 0 against an expectation of 1 and looks exactly like a corrupt block.
+    // Found by printing the samples, not by reading the loop.
+    ++block;
 
-    // Now the real assertion: 40 more blocks, and every one comes back at half gain
-    // and exactly one block late.
     constexpr int kBlocks = 40;
+    int corrupt = 0;
+    int silent = 0;
+    int dryInsteadOfProcessed = 0;
+    int shifted = 0;
     for (int measured = 0; measured < kBlocks; ++measured, ++block) {
-        fillBlock(in, block);
-        auto view = in.view(kBlockSize);
-        int midiOut = 0;
-        midi::Message midiOutput[kChainMidiOutCapacity];
-        int activeMidi = 0;
-        instance->process(view, contextAt(block), midiBuffer.data(), activeMidi, midiOutput,
-                          midiOut);
-        std::this_thread::sleep_for(kBlockPace);
-        if (!blockEquals(in, block - 1, kHalfGain)) {
-            ++wrong;
-            if (blockIsDry(in, block))
-                ++dryInsteadOfProcessed;
-        }
+        const int returned = feedBlock(*instance, feed, block, kHalfGain, retries);
+        if (returned == 1)
+            continue;
+        if (returned == -2)
+            ++silent;
+        else if (returned < 0)
+            ++corrupt;
+        else if (returned == 0)
+            ++dryInsteadOfProcessed;
+        else
+            ++shifted;
     }
 
-    INFO("blocks compared: " << kBlocks << ", wrong: " << wrong
-                             << ", of which were dry pass-throughs: " << dryInsteadOfProcessed);
-    CHECK(wrong == 0);
+    const auto earlySnapshot = instance->session()->ring().stats().snapshot();
+    INFO("blocks compared: " << kBlocks << ", corrupt: " << corrupt << ", silent: " << silent
+                             << ", dry: " << dryInsteadOfProcessed << ", wrong delay: " << shifted
+                             << ", push retries: " << retries);
+    INFO("host ring: torn " << earlySnapshot.tornReads << ", lost " << earlySnapshot.blocksLost
+                            << ", overruns " << earlySnapshot.overruns << ", underruns "
+                            << earlySnapshot.underruns);
+    INFO("helper telemetry: torn "
+         << instance->session()->telemetry()->tornReads.load() << ", lost "
+         << instance->session()->telemetry()->blocksLost.load() << ", overruns "
+         << instance->session()->telemetry()->overruns.load() << ", underruns "
+         << instance->session()->telemetry()->underruns.load() << ", processed "
+         << instance->session()->telemetry()->blocksProcessed.load());
+    // Corrupt is the assertion that matters: a block that is neither the input passed
+    // through nor an earlier input processed at the right gain is a block that came
+    // back wrong, and no amount of scheduling explains it.
+    CHECK(corrupt == 0);
+    CHECK(silent == 0);
+    CHECK(dryInsteadOfProcessed == 0);
+    CHECK(shifted == 0);
     CHECK(instance->blocksReturned() >= static_cast<std::uint64_t>(kBlocks));
-    CHECK(instance->refusedPushes() == 0u);
+    // A push the session could not carry at all is a caller bug; a push that needed a
+    // retry is scheduling, and feedBlock() already accounted for it.
+    CHECK(instance->rejectedBlocks() == 0u);
+    INFO("refused pushes that needed a retry: " << instance->refusedPushes()
+                                                << ", of which a drained block fixed: "
+                                                << instance->drainRetries());
 
     const auto snapshot = instance->session()->ring().stats().snapshot();
     INFO("torn " << snapshot.tornReads << ", lost " << snapshot.blocksLost);
@@ -352,34 +412,55 @@ TEST_CASE("A chain cannot tell a sandboxed slot from an in-process one", "[sandb
     CHECK(chain.at(0) != nullptr);
     CHECK(chain.at(0)->descriptor().name == "Sandbox Reference Gain");
 
-    // Let the parameter land through the chain's own entry point, then measure - with
-    // contiguous block numbers across both phases, for the reason the case above gives.
+    // Through the chain's own entry point, with the same retry a device clock would
+    // never need. The proxy is kept as a raw pointer because the chain owns it now and
+    // its counters are what tells the test a block was really published.
+    SandboxedPluginInstance* proxy = static_cast<SandboxedPluginInstance*>(chain.at(0));
+    REQUIRE(proxy != nullptr);
     std::vector<midi::Message> midiBuffer(64);
     int activeMidi = 0;
-    test::Block in(kChannels, kBlockSize);
-    bool settled = false;
-    int block = 0;
-    for (; block < 60 && !settled; ++block) {
-        fillBlock(in, block);
+    auto feed = [&](test::Block& in, int block) {
         auto view = in.view(kBlockSize);
         chain.process(view, contextAt(block), midiBuffer, activeMidi);
         std::this_thread::sleep_for(kBlockPace);
-        settled = block > 0 && blockEquals(in, block - 1, kHalfGain);
-    }
-    INFO("blocks fed before the chain settled: " << block);
-    REQUIRE(settled);
+    };
 
-    int wrong = 0;
-    for (int measured = 0; measured < 30; ++measured, ++block) {
-        fillBlock(in, block);
-        auto view = in.view(kBlockSize);
-        chain.process(view, contextAt(block), midiBuffer, activeMidi);
-        std::this_thread::sleep_for(kBlockPace);
-        if (!blockEquals(in, block - 1, kHalfGain))
-            ++wrong;
+    int retries = 0;
+    int block = 0;
+    int delay = -1;
+    for (; block < 80; ++block) {
+        delay = feedBlock(*proxy, feed, block, kHalfGain, retries);
+        REQUIRE(delay >= 0);
+        if (delay == 1)
+            break;
     }
-    INFO("wrong blocks through the chain: " << wrong);
-    CHECK(wrong == 0);
+    INFO("blocks fed before the chain settled: " << block << ", push retries: " << retries);
+    REQUIRE(delay == 1);
+    ++block; // the priming loop breaks on the block it just fed; see the case above
+
+    int corrupt = 0;
+    int silent = 0;
+    int wrongDelay = 0;
+    for (int measured = 0; measured < 30; ++measured, ++block) {
+        const int returned = feedBlock(*proxy, feed, block, kHalfGain, retries);
+        if (returned == 1)
+            continue;
+        if (returned == -2)
+            ++silent;
+        else if (returned < 0)
+            ++corrupt;
+        else
+            ++wrongDelay;
+    }
+    const auto chainSnapshot = proxy->session()->ring().stats().snapshot();
+    INFO("corrupt: " << corrupt << ", silent: " << silent << ", wrong delay: " << wrongDelay
+                     << ", retries: " << retries);
+    INFO("host ring: torn " << chainSnapshot.tornReads << ", lost " << chainSnapshot.blocksLost
+                            << ", overruns " << chainSnapshot.overruns << ", underruns "
+                            << chainSnapshot.underruns);
+    CHECK(corrupt == 0);
+    CHECK(silent == 0);
+    CHECK(wrongDelay == 0);
 
     // And the chain's own state round trip works on a sandboxed slot, which is what
     // makes saving a project with one in it possible.
@@ -394,10 +475,11 @@ TEST_CASE("A chain cannot tell a sandboxed slot from an in-process one", "[sandb
     // skips it before process() is ever called.
     chain.setBypassed(0, true);
     CHECK(chain.isBypassed(0));
-    fillBlock(in, block);
-    auto view = in.view(kBlockSize);
-    chain.process(view, contextAt(block), midiBuffer, activeMidi);
-    CHECK(blockIsDry(in, block));
+    test::Block bypassed(kChannels, kBlockSize);
+    fillBlock(bypassed, block);
+    auto bypassView = bypassed.view(kBlockSize);
+    chain.process(bypassView, contextAt(block), midiBuffer, activeMidi);
+    CHECK(blockIsDry(bypassed, block));
 }
 
 TEST_CASE("Parameter state round-trips through a sandboxed slot", "[sandbox][proxy]") {
@@ -424,23 +506,25 @@ TEST_CASE("Parameter state round-trips through a sandboxed slot", "[sandbox][pro
     // And the restored value reached the helper, not just the proxy's cache: 0.75
     // normalised is a gain of 1.5, so the block coming back is 1.5 times the one fed
     // in before it.
-    const bool applied = pumpUntil(
-        *instance,
-        [&](int block, const dsp::AudioBlockView& view) {
-            if (block == 0)
-                return false;
-            for (int channel = 0; channel < kChannels; ++channel) {
-                for (int frame = 0; frame < kBlockSize; ++frame) {
-                    const float want = signalAt(block - 1, channel, frame) * 1.5f;
-                    if (view.channelPointers[channel][frame] != want)
-                        return false;
-                }
-            }
-            return true;
-        },
-        40);
-    INFO("restored gain visible in the returned audio: " << applied);
-    CHECK(applied);
+    int retries = 0;
+    int delay = -1;
+    for (int block = 0; block < 80 && delay != 1; ++block) {
+        delay = feedBlock(*instance,
+                          [&](test::Block& in, int b) {
+                              auto view = in.view(kBlockSize);
+                              std::vector<midi::Message> none;
+                              int midiOut = 0;
+                              midi::Message midiOutput[kChainMidiOutCapacity];
+                              int activeMidi = 0;
+                              instance->process(view, contextAt(b), none.data(), activeMidi,
+                                                midiOutput, midiOut);
+                              std::this_thread::sleep_for(kBlockPace);
+                          },
+                          block, 1.5f, retries);
+        REQUIRE(delay >= 0);
+    }
+    INFO("delay after restoring state: " << delay << ", retries: " << retries);
+    CHECK(delay == 1);
 }
 
 TEST_CASE("Preparing twice leaves one helper, not two", "[sandbox][proxy]") {
@@ -466,22 +550,25 @@ TEST_CASE("Preparing twice leaves one helper, not two", "[sandbox][proxy]") {
 
     // And the new session actually works.
     instance->setParameterNormalised(0, kQuarterTurn);
-    const bool landed = pumpUntil(
-        *instance,
-        [&](int block, const dsp::AudioBlockView& view) {
-            if (block == 0)
-                return false;
-            for (int channel = 0; channel < kChannels; ++channel) {
-                for (int frame = 0; frame < kBlockSize; ++frame) {
-                    const float want = signalAt(block - 1, channel, frame) * kHalfGain;
-                    if (view.channelPointers[channel][frame] != want)
-                        return false;
-                }
-            }
-            return true;
-        },
-        40);
-    CHECK(landed);
+    int retries = 0;
+    int delay = -1;
+    for (int block = 0; block < 80 && delay != 1; ++block) {
+        delay = feedBlock(*instance,
+                          [&](test::Block& in, int b) {
+                              auto view = in.view(kBlockSize);
+                              std::vector<midi::Message> none;
+                              int midiOut = 0;
+                              midi::Message midiOutput[kChainMidiOutCapacity];
+                              int activeMidi = 0;
+                              instance->process(view, contextAt(b), none.data(), activeMidi,
+                                                midiOutput, midiOut);
+                              std::this_thread::sleep_for(kBlockPace);
+                          },
+                          block, kHalfGain, retries);
+        REQUIRE(delay >= 0);
+    }
+    INFO("delay after a second prepare(): " << delay << ", retries: " << retries);
+    CHECK(delay == 1);
 }
 
 TEST_CASE("A processor that does not exist leaves the slot failed and dry",

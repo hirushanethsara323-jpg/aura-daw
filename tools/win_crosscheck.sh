@@ -87,7 +87,12 @@ trap '[ -n "$HEADER_DIR" ] && rm -rf "$HEADER_DIR"; rm -f "$LOG" "$FAILED_LOG"' 
 # flags, so a cross-checked file is held to the same standard as a native build.
 check_file() {
     local file="$1" label="$2"
-    if ! "$CXX" -std=c++20 -I "$ROOT/include" \
+    # -I src mirrors CMakeLists.txt's `target_include_directories(aura_engine PRIVATE
+    # src)`, which is how one internal header reaches another across subdirectories
+    # (src/plugin/sandbox/ needs src/plugin/ChildProcess.hpp). A cross-check that does
+    # not mirror the build's include paths reports a failure that the build does not
+    # have, and is then ignored the next time it reports one that does.
+    if ! "$CXX" -std=c++20 -I "$ROOT/include" -I "$ROOT/src" \
             -D_WIN32 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -DUNICODE -D_UNICODE \
             -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x0A00 \
             -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion \
