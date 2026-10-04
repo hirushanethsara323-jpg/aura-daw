@@ -85,11 +85,18 @@ struct LoopLimits {
     std::int64_t startupTimeoutMs = kDefaultStartupTimeoutMs;
 };
 
-/// Idle spins before the first sleep. Spinning briefly is worth it: a block usually
-/// follows within microseconds of the last one, and a 1 ms sleep on every gap would
-/// add up to a block of latency the transport does not owe.
-constexpr std::uint64_t kSpinsBeforeSleep = 64;
-constexpr int kIdleSleepMs = 1;
+/// Idle spins before the first sleep, and how long that sleep is.
+///
+/// Spinning briefly is worth it: a block usually follows within microseconds of the
+/// last one. But the sleep has to be a small fraction of a block period, because it
+/// is the helper's worst-case reaction time to work arriving - and 1 ms against a
+/// 2.7 ms block at 128 frames and 48 kHz is a third of the budget spent doing
+/// nothing. 512 spins covers a gap of a few tens of microseconds; after that, 200 us
+/// is short enough to react inside any block period AURA supports and long enough
+/// that an idle helper is still giving a core back to the host's callback, which is
+/// the reason it sleeps at all.
+constexpr std::uint64_t kSpinsBeforeSleep = 512;
+constexpr int kIdleSleepUs = 200;
 
 /// The helper's real-time loop. Audited by tools/rt_audit.py: it is in
 /// RT_SCOPE_GLOBS and its name is in RT_FUNCTION_PATTERNS, so anything below that
@@ -213,7 +220,7 @@ LoopExit runHelperLoop(SharedAudioRing& ring, SandboxProcessor& processor,
 
         if (++idleSpins < kSpinsBeforeSleep)
             continue;
-        std::this_thread::sleep_for(std::chrono::milliseconds(kIdleSleepMs));
+        std::this_thread::sleep_for(std::chrono::microseconds(kIdleSleepUs));
 
         // 5. Is the host still there? Inferred from the arrival of blocks, because a
         //    dead host cannot say so. See HelperProtocol.hpp for why this is a

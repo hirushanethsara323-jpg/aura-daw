@@ -229,6 +229,49 @@ The host-side extensions AURA implements first: `log`, `thread-check`, `params`,
 3. **Proxy** — `SandboxedPluginInstance` implements `PluginInstance`; the chain and
    therefore the whole engine see no difference. Tests: audio equals the in-process
    result within the compensated block, parameters and notes cross, state round-trips.
+   — **Landed.** `plugin/sandbox/{SandboxSession,SandboxedPluginInstance}`; 8 tests in
+   `tests/plugin/sandbox/SandboxProxyTests.cpp` (`[proxy]`), each spawning a real
+   helper, including one that puts the proxy in a real `PluginChain` and checks latency
+   summing, state round trip and bypass through the chain's own API.
+   Three things this phase settled:
+   - **An in-place caller reverses the exchange order.** `PluginInstance::process()`
+     hands over one buffer that is both input and output, so the proxy pushes and then
+     pops: the push copies the input into the slot, after which the buffer may receive
+     what comes back. `SharedAudioRing::exchange()` pops first, deliberately, to give
+     the helper the longest run at the previous block - and with an in-place caller
+     that order would overwrite the input before publishing it. Both orders are
+     correct; they answer to different callers.
+   - **A refused push must drain, or the pipeline deadlocks.** The helper runs under
+     back-pressure (phase 2), so it holds a processed block until the output ring has
+     room and takes no new input while it does. A host that returns early on a refused
+     push - leaving the audio dry, which looks like the safe answer - waits for the
+     helper to consume, and the helper waits for the host to pop: a deadlock that
+     presents exactly as a hung plug-in, found by a cross-process test and not by
+     reading either side. The proxy now drains one output into scratch (allocated in
+     `prepare()`, never in `process()`) and retries the push once.
+   - **Tests have to pace themselves.** A real host calls `process()` once per device
+     callback. Calling it back to back is not a harsher test but a different one: the
+     host outruns a peer in another process that has not been scheduled yet, and what
+     gets measured is the test runner's loop. One block per millisecond is inside every
+     block period AURA supports and outside the helper's 200 µs idle reaction, which
+     came down from 1 ms for that reason - the sleep is the helper's worst-case
+     reaction time, and 1 ms against a 2.7 ms block is a third of the budget. Pacing
+     alone was not enough on the Windows runners, so the cases also retry a block until
+     the proxy has published it: a dropped input shifts the deferral by one for the
+     rest of the run, and every later comparison is then against the wrong index. Each
+     returned block is *classified* rather than assumed - dry, delay n, silent from a
+     discarded torn read, or corrupt - so a scheduling fact is never reported as a
+     transport bug and a transport bug is never excused as scheduling. Two of the four
+     Windows failures this caused were the test's own off-by-one: the priming loop
+     breaks on the block it just fed, so measuring from that index feeds it twice and
+     the second call returns its own output, which reads as a delay of 0 where 1 was
+     expected. It was found by printing the samples, not by reading the loop.
+   Still deferred, deliberately: the proxy reports no editor (it stays in the helper
+   and needs the shell, M9/M10), `isActive()` is always false (whether a plug-in is
+   still producing a tail is something only the plug-in knows, and `Telemetry` has a
+   `tailSamples` field nothing publishes yet), and `saveState()` saves the parameters
+   the proxy last sent rather than the plug-in's own blob - which crosses with the
+   crash protocol in phase 4, where it is the recovery point and has to be right.
 4. **Crash and hang** — the fixture grows a deliberate crash/hang hook (launched from
    a *child* process, unlike M6's scanner hooks, because it runs the RT loop);
    tests assert the session survives, the slot goes dry, the watchdog kills a hung

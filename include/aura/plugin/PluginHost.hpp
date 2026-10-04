@@ -157,6 +157,15 @@ private:
 
 /// A loaded plug-in. The ABI-specific implementation lives behind this
 /// interface so the engine, mixer and UI never see VST3/CLAP types.
+/// How many MIDI events a chain hands a plug-in to return per block.
+///
+/// A constant rather than a parameter of `PluginInstance::process()` because the
+/// interface passes a raw pointer and a count by reference, and never says how big
+/// the buffer is - so every implementation has had to assume. Assumptions about a
+/// buffer size are how a chain gets a stack overwrite from an arpeggiator that had a
+/// good idea. Both the chain and the sandbox proxy now use this one number.
+inline constexpr int kChainMidiOutCapacity = 64;
+
 class PluginInstance {
 public:
     virtual ~PluginInstance() = default;

@@ -12,7 +12,7 @@ Last updated with M7 phase 1 (the sandbox transport).
 | | |
 |---|---|
 | Version | `0.1.0` (development; no release has been shipped) |
-| Milestone | **M7 — Plug-in sandbox + CLAP**, phase 2 of 7 landed |
+| Milestone | **M7 — Plug-in sandbox + CLAP**, phase 3 of 7 landed |
 | Target platform | Windows 10/11 x64; developed and tested on Linux/GCC with MSVC parity enforced by the warning contract |
 | Licence | GPL-3.0-or-later |
 | Default branch | `main` |
@@ -21,9 +21,9 @@ Last updated with M7 phase 1 (the sandbox transport).
 
 | Configuration | State |
 |---|---|
-| `RelWithDebInfo`, GCC 14, Linux | **green** — configures, builds with no warnings, 165/165 `ctest` entries pass |
+| `RelWithDebInfo`, GCC 14, Linux | **green** — configures, builds with no warnings, 173/173 `ctest` entries pass |
 | `-DAURA_WARNINGS_AS_ERRORS=ON` | **green** — the full `/W4 /WX` ↔ `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wunused-parameter` contract |
-| `-DAURA_ENABLE_ALLOC_TRACKING=ON` | **green** — 165/165 together with `-DAURA_WARNINGS_AS_ERRORS=ON` in one build, 0 warnings, and the transport's allocation counter measures **0** over a 2 000-block run |
+| `-DAURA_ENABLE_ALLOC_TRACKING=ON` | **green** — 173/173 together with `-DAURA_WARNINGS_AS_ERRORS=ON` in one build, 0 warnings, and the transport's allocation counter measures **0** over a 2 000-block run |
 | Windows / MSVC (GitHub Actions) | **green on pull request #13** — run 36994237694, **12 of 12 jobs** at `00f8ea3`: Debug and Release `/W4 /WX`, ASan/UBSan, the VST 3 fixture, fuzzing, clang-tidy, the MinGW cross-check and the soak harness. Phase 2 was merged on the strength of that run, so the run predates this row by one documentation-only commit. `main` was previously verified at `1a88a90` (run 36981136588). Those two Windows runs are the reason phase 2 shipped a fix it would otherwise have missed: MSVC at `/O2` found a data race that no Linux configuration and no MSVC Debug build could see |
 | `-DAURA_ENABLE_VST3=ON` | not exercised in this environment (the SDK is fetched at a pinned tag; needs network and Windows or a Linux bundle layout) |
 
@@ -31,10 +31,11 @@ Last updated with M7 phase 1 (the sandbox transport).
 
 | Layer | State |
 |---|---|
-| `ctest` | **165 entries, all passing** — 163 Catch2 test cases + 2 static audits |
-| `tools/rt_audit.py` | 68 files, **82 audio-thread functions scanned, 0 errors, 0 warnings**, 1 annotated allowance (`src/midi/Instrument.cpp:250`) and 2 printed exemptions (`sampleInto`, `publishPlan`). Coverage grew from 62 in three steps: the helper's real-time loop was added as a scope, an extractor bug that skipped every `[[nodiscard]]` inline definition was fixed (13 functions), and a real-time name was made to beat a control-thread shape (`setTargetGains`). Every new gate was verified by injecting a violation and confirming the audit catches it — including confirming the two deliberate exemptions are still exempt |
-| `tools/include_audit.py` | 143 files, **0 findings** |
+| `ctest` | **173 entries, all passing** — 171 Catch2 test cases + 2 static audits |
+| `tools/rt_audit.py` | 72 files, **84 audio-thread functions scanned, 0 errors, 0 warnings**, 1 annotated allowance (`src/midi/Instrument.cpp:250`) and 2 printed exemptions (`sampleInto`, `publishPlan`). Coverage grew from 62 in four steps: the helper's real-time loop was added as a scope, an extractor bug that skipped every `[[nodiscard]]` inline definition was fixed (13 functions), a real-time name was made to beat a control-thread shape (`setTargetGains`), and the proxy's `process()` plus its transport publisher joined — which is what verifies that the drain-on-refusal path allocates nothing, by the audit rather than by inspection. Every new gate was verified by injecting a violation and confirming the audit catches it — including confirming the two deliberate exemptions are still exempt |
+| `tools/include_audit.py` | 148 files, **0 findings** |
 | Sandbox transport (`[sandbox]`) | 15 cases, 2108 assertions, including a 60 000-block two-thread stress run |
+| Sandbox proxy (`[proxy]`) | 8 cases, each spawning a real helper: audio equal to the in-process result one block late compared per sample with `==`, notes crossing both ways, a helper that stops leaving the slot **dry**, and a real `PluginChain` that cannot tell the difference — latency summing, state round trip and bypass all through the chain's own API |
 | Sandbox helper (`[shm]`, `[helper]`) | 12 cases across two files: named shared memory on both platforms, and a **really spawned** `aura_plugin_host` that processes 200 blocks across a process boundary and returns every sample bit-exact, every origin once and in order |
 | Fuzzing | 3 libFuzzer targets in CI + portable `[fuzz]` tests |
 | Soak | `bench/aura_soak` runs 2 minutes in CI; the **8-hour single-take run is still outstanding** (M5's last item) |
@@ -71,12 +72,18 @@ which test proves which claim.
   crosses a real process boundary under back-pressure and comes back bit-exact.
   The helper's real-time loop is audited by `rt_audit.py`, and the helper is
   format-agnostic — it drives `SandboxProcessor`, not an SDK.
+- **Sandbox proxy (M7 phase 3)** — `SandboxSession` owns a helper's life and
+  `SandboxedPluginInstance` implements `PluginInstance` on top of it, so a
+  `PluginChain` cannot tell a sandboxed slot from an in-process one: latency sums,
+  state round-trips, bypass and failed-slot skipping all work through the chain's own
+  API. Its `process()` is inside `rt_audit.py`'s scope, so the drain-on-refusal path
+  is verified allocation-free by the audit rather than by inspection.
 
 ## Partial
 
 | Area | What exists | What is missing |
 |---|---|---|
-| Out-of-process plug-in sandbox | the transport (arena + rings), the named mapping, the supervisor and the helper process, 27 tests | **no caller**: nothing in the engine spawns a helper, so no plug-in is isolated yet. No proxy, no crash protocol, no watchdog, no policy plumbing, no format adapter in the helper (M7 phases 3–7) |
+| Out-of-process plug-in sandbox | the transport, the named mapping, the supervisor, the helper process and a `PluginInstance` proxy a real chain cannot distinguish — 35 tests | **nothing chooses one**: `PluginHost`'s creation path still returns in-process adapters, so no plug-in a user loads is isolated yet. No crash protocol, no watchdog, no policy plumbing, no format adapter in the helper, no editor, and `saveState()` saves the proxy's parameters rather than the plug-in's own blob (M7 phases 4–7) |
 | CLAP | the option and the format enumerator | no adapter; `hostSupports(PluginFormat::Clap)` returns false |
 | Performance gates | measured and reported in `docs/PERFORMANCE.md` | not *enforced* — that needs a pinned machine |
 | M5 hardening | every gate green | the 8-hour single-take soak |
@@ -124,6 +131,12 @@ Documented **limits** that are decisions rather than defects:
   say so. The real watchdog counts blocks in the host and lands with the crash
   protocol (phase 4), and a Windows job object with `KILL_ON_JOB_CLOSE` (phase 6)
   removes the need for the helper to reason about time at all.
+- A sandboxed slot's latency is one block **as long as the helper keeps up**. The ring
+  is two deep, so a helper that misses a block deadline costs one dry block and then
+  two blocks of effective delay while `latencySamples()` still reports one. Reported
+  rather than padded: adding a block of PDC to every sandboxed plug-in to cover a slow
+  machine would cost latency the design does not owe, and `dryBlocks()` shows the miss.
+  A helper that misses deadlines is phase 4's watchdog's business.
 - `request::kSaveState` crosses the boundary and is **acknowledged but refused**:
   the arena has no state buffer and the helper must not touch the disk from its
   real-time thread. Wiring it is a `kLayoutVersion` bump that belongs with phase 4,
@@ -156,16 +169,26 @@ host side originally yielded in a tight loop while waiting for room, which kept 
 core the helper needed, so the helper fell behind. A test that starves the process
 it is measuring is measuring the test.
 
+One behaviour was found and fixed inside this increment rather than after it: the
+proxy's first version returned early when a push was refused, leaving the audio dry.
+That looked like the safe answer and was a deadlock — the helper holds a processed
+block until the output ring has room and takes no new input while it does, so a host
+that will not pop until its push succeeds, and a helper that will not push until the
+host pops, wait for each other forever. It presents exactly as a hung plug-in, and
+only a cross-process test could show it: read either side alone and both look
+correct.
+
 ## Next milestone
 
-**M7 phase 3 — the proxy.** `SandboxedPluginInstance` implements `PluginInstance` on
-top of a helper session, so the chain and therefore the whole engine see no
-difference between a plug-in in this process and one in another: `processBlock()`
-becomes one `exchange()`, latency is reported through `latencyFrames()` for the
-graph to compensate, and a helper that dies leaves the slot dry rather than the
-session silent. That is the phase in which something in AURA finally *spawns* a
-helper, and therefore the phase in which the sandbox starts isolating. Then phase 4:
-the crash and hang protocol — a fixture with a deliberate crash hook, a watchdog
-counting blocks rather than milliseconds, and a restart from the last state blob.
-Design, decisions and the remaining phases:
+**M7 phase 4 — crash and hang.** The proxy exists and a chain cannot tell it from an
+in-process slot, but nothing has yet been asked to survive a plug-in that dies, which
+is the only reason this milestone exists. Phase 4 is a fixture with a deliberate crash
+and hang hook (launched from a *child* process, unlike M6's scanner hooks, because it
+runs the real-time loop), a watchdog that counts blocks rather than milliseconds —
+`Telemetry::blocksProcessed` is already the heartbeat — and a restart from the last
+state blob. That is also the phase that gives the blob somewhere to travel: the arena
+has no state buffer, so wiring `saveState()` across the boundary is a `kLayoutVersion`
+bump. Then phase 5 makes it reachable: `PluginUserData::sandbox`, the UI-facing API and
+the database round trip — the point at which a user can turn it on. Design, decisions
+and the remaining phases:
 [`docs/research/PLUGIN_SANDBOX_RESEARCH.md`](docs/research/PLUGIN_SANDBOX_RESEARCH.md).
