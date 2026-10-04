@@ -191,8 +191,30 @@ int feedBlock(SandboxedPluginInstance& proxy, Process&& process, int block, floa
         const std::uint64_t publishedBefore = proxy.blocksPublished();
         fillBlock(in, block);
         process(in, block);
-        if (proxy.blocksPublished() > publishedBefore)
+        if (proxy.blocksPublished() > publishedBefore) {
+            // Wait for the helper to have delivered everything except the block just
+            // published, so the next call's pop finds it ready.
+            //
+            // This is the part the test has to supply itself. A device clock gives a
+            // plug-in a whole block period between calls; a test loop gives it nothing,
+            // and without this wait the helper loses the race on any runner busy enough
+            // to matter - the slot returns dry once and the deferral steps up by one for
+            // the rest of the run, because the host still takes one block back per call.
+            // Tolerating that would mean asserting a range of latencies and learning
+            // nothing; emulating the clock means asserting the one the design promises.
+            // Delivered, not merely processed: the count in telemetry is incremented
+            // when the helper publishes an output, so waiting on it is waiting for the
+            // block to be in the ring where the next pop will find it. Waiting for
+            // "all but the last" instead - which is what this condition said first -
+            // leaves the very first pop to find an empty ring, and one dry block at the
+            // start puts a second block in flight for the rest of the run.
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (proxy.session()->helperBlocksProcessed() < proxy.blocksPublished() &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
             return classifyReturned(in, block, gain);
+        }
         ++retries;
         std::this_thread::sleep_for(kBlockPace);
     }
@@ -332,12 +354,11 @@ TEST_CASE("A sandboxed slot returns the processor's audio one block later",
     // Corrupt is the assertion that matters: a block that is neither the input passed
     // through nor an earlier input processed at the right gain is a block that came
     // back wrong, and no amount of scheduling explains it.
-    // The delay the design promises, and the bound the ring depth allows. A delay of
-    // two means this runner could not give the helper a block period - which is what
-    // an instrumented or a two-core CI machine asked to pace at 1 ms instead of the
-    // real 2.7 ms will do, and which no device would ever ask of a plug-in.
-    CHECK(m.settledDelay >= 1);
-    CHECK(m.settledDelay <= 2);
+    // feedBlock() gives the helper the block period a device clock would, so the
+    // deferral is the one the design promises on any machine rather than the one this
+    // runner happens to manage. A settled delay of two here would mean the helper
+    // missed a deadline it had unlimited time to meet, which is a real fault.
+    CHECK(m.settledDelay == 1);
     // Once settled it must not move: a growing delay is a pipeline filling up, and a
     // shrinking one is a block appearing from nowhere.
     CHECK(m.otherDelay == 0);
@@ -475,8 +496,7 @@ TEST_CASE("A chain cannot tell a sandboxed slot from an in-process one", "[sandb
                                                << m.otherDelay << ", host torn "
                                                << chainSnapshot.tornReads << ", lost "
                                                << chainSnapshot.blocksLost);
-    CHECK(m.settledDelay >= 1);
-    CHECK(m.settledDelay <= 2);
+    CHECK(m.settledDelay == 1);
     CHECK(m.corrupt == 0);
     CHECK(m.silent == 0);
     CHECK(m.dry == 0);
@@ -551,8 +571,7 @@ TEST_CASE("Parameter state round-trips through a sandboxed slot", "[sandbox][pro
         REQUIRE(delay >= -1);
     }
     INFO("delay after restoring state: " << delay << ", retries: " << retries);
-    CHECK(delay >= 1);
-    CHECK(delay <= 2);
+    CHECK(delay == 1);
 }
 
 TEST_CASE("Preparing twice leaves one helper, not two", "[sandbox][proxy]") {
@@ -596,8 +615,7 @@ TEST_CASE("Preparing twice leaves one helper, not two", "[sandbox][proxy]") {
         REQUIRE(delay >= -1);
     }
     INFO("delay after a second prepare(): " << delay << ", retries: " << retries);
-    CHECK(delay >= 1);
-    CHECK(delay <= 2);
+    CHECK(delay == 1);
 }
 
 TEST_CASE("A processor that does not exist leaves the slot failed and dry",
