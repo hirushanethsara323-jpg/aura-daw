@@ -127,6 +127,17 @@ public:
     /// to compensate for a plug-in that reports latency; this is the same mechanism a
     /// look-ahead limiter uses, and it is why the sandbox costs a block rather than
     /// costing the audio thread a wait.
+    ///
+    /// This is the latency the transport *promises*, and it holds while the helper
+    /// finishes a block within a block period - which a device clock guarantees it the
+    /// time to do, and which a plug-in too slow to meet would already be missing
+    /// in-process. If the helper does miss, the slot returns dry once and the effective
+    /// delay grows to two blocks, because the ring is two deep and the host takes one
+    /// back per call. That is reported here rather than measured into this number on
+    /// purpose: adding a block of PDC to every sandboxed plug-in on every machine to
+    /// cover a slow runner would cost latency that the design does not owe. A helper
+    /// that misses deadlines is a watchdog matter (phase 4), and `dryBlocks()` is where
+    /// it shows up first.
     [[nodiscard]] int latencySamples() const noexcept override;
 
     [[nodiscard]] int numParameters() const noexcept override;

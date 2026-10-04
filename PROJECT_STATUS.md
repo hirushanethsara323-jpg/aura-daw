@@ -131,6 +131,12 @@ Documented **limits** that are decisions rather than defects:
   say so. The real watchdog counts blocks in the host and lands with the crash
   protocol (phase 4), and a Windows job object with `KILL_ON_JOB_CLOSE` (phase 6)
   removes the need for the helper to reason about time at all.
+- A sandboxed slot's latency is one block **as long as the helper keeps up**. The ring
+  is two deep, so a helper that misses a block deadline costs one dry block and then
+  two blocks of effective delay while `latencySamples()` still reports one. Reported
+  rather than padded: adding a block of PDC to every sandboxed plug-in to cover a slow
+  machine would cost latency the design does not owe, and `dryBlocks()` shows the miss.
+  A helper that misses deadlines is phase 4's watchdog's business.
 - `request::kSaveState` crosses the boundary and is **acknowledged but refused**:
   the arena has no state buffer and the helper must not touch the disk from its
   real-time thread. Wiring it is a `kLayoutVersion` bump that belongs with phase 4,

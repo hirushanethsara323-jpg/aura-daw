@@ -230,6 +230,14 @@ turn a glitch into a stutter. The chain skips bypassed and failed slots, and
   session, so a `PluginChain` cannot tell the difference - it sums the slot's latency
   like any other, saves and restores its state like any other, and skips it when it
   has failed like any other. `SandboxSession` owns the lifecycle underneath.
+  A sandboxed slot costs one block of latency, reported through `latencySamples()` so
+  the graph compensates the way it already does for a look-ahead limiter. That promise
+  holds while the helper finishes a block inside a block period, which a device clock
+  gives it the time to do; if it misses, the slot returns dry once and the effective
+  delay becomes two blocks, which `dryBlocks()` reports and phase 4's watchdog treats
+  as a fault. Tests measure which of the two a runner settles at rather than assuming
+  the faster one, because assuming it made an instrumented CI machine look like a
+  broken transport.
   **What is still missing is the decision to use one.** `PluginHost`'s creation path
   still returns in-process adapters, so a plug-in a user loads today runs in AURA's
   address space and a crashing plug-in still crashes AURA. Choosing between the two

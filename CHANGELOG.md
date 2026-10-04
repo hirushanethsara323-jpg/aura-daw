@@ -207,6 +207,16 @@ written down here did not land.
 
 ### Changed
 
+- The proxy tests settle the pipeline before measuring it, and then assert the delay
+  does not move. The ring is two slots deep, so a helper that finishes inside a block
+  period gives a deferral of exactly one block and one that does not gives two: it
+  misses once, the slot returns dry, and from then on two blocks are in flight. Both
+  are the transport working. The first version asserted one, which passed on a fast
+  runner and failed on an instrumented one and on the Windows runners with the same
+  code — `corrupt: 0, silent: 0, torn: 0, lost: 0, wrong delay: 39` is a scheduling
+  fact, and reporting it as a transport bug sends somebody to debug the wrong process.
+  Each returned block is now classified (dry / delay *n* / silent from a discarded torn
+  read / corrupt) and only the last is a failure.
 - The helper's idle sleep is 200 µs after 512 spins, down from 1 ms after 64. That
   sleep is the helper's worst-case reaction time to work arriving, and 1 ms against
   a 2.7 ms block at 128 frames and 48 kHz is a third of the budget spent doing
