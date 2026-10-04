@@ -557,12 +557,12 @@ void PluginChain::process(dsp::AudioBlockView& audio, const dsp::ProcessContext&
         if (!slot.instance || slot.bypassed || slot.instance->hasFailed())
             continue;
         int midiOut = 0;
-        midi::Message midiOutput[64];
+        midi::Message midiOutput[kChainMidiOutCapacity];
         slot.instance->process(audio, context, midiBuffer.data(), activeMidiCount, midiOutput,
                                midiOut);
         // Plug-ins that generate MIDI (arpeggiators) hand it back into the buffer
         // for instruments further down the chain.
-        for (int i = 0; i < midiOut && activeMidiCount < 64; ++i)
+        for (int i = 0; i < midiOut && activeMidiCount < kChainMidiOutCapacity; ++i)
             midiBuffer[static_cast<std::size_t>(activeMidiCount++)] = midiOutput[i];
     }
 }

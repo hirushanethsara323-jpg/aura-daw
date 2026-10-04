@@ -203,6 +203,8 @@ add_library(aura_engine STATIC
   src/plugin/sandbox/SharedMemory.cpp
   src/plugin/sandbox/ProcessSupervisor.cpp
   src/plugin/sandbox/SandboxProcessor.cpp
+  src/plugin/sandbox/SandboxSession.cpp
+  src/plugin/sandbox/SandboxedPluginInstance.cpp
   src/automation/Automation.cpp
   src/timeline/Timeline.cpp
   src/engine/AudioEngine.cpp
@@ -215,6 +217,13 @@ add_library(Aura::Engine ALIAS aura_engine)
 target_include_directories(aura_engine PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
+# Internal headers, reachable as "plugin/ChildProcess.hpp" rather than by a relative
+# path out of a subdirectory. PRIVATE and src/-relative on purpose: these are not
+# installed and not part of the public API, and a `#include "../ChildProcess.hpp"`
+# from src/plugin/sandbox/ would compile but would say nothing about where the header
+# belongs. The sandbox session needs helperExecutablePath(), which is the same search
+# the VST 3 scanner uses and should not be a second copy of it.
+target_include_directories(aura_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(aura_engine PUBLIC Aura::Core Aura::Dsp)
 if(WIN32)
   # ole32 - COM (WASAPI devices, CoInitializeEx/CoCreateInstance/CoTaskMemFree)
