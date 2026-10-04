@@ -89,6 +89,7 @@ add_executable(aura_tests
   plugin/ChildProcessTests.cpp
   plugin/sandbox/SandboxTransportTests.cpp
   plugin/sandbox/SandboxHelperTests.cpp
+  plugin/sandbox/SandboxProxyTests.cpp
 )
 target_link_libraries(aura_tests PRIVATE Aura::Engine Aura::Dsp Aura::Core aura_test_support)
 

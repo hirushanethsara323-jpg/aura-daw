@@ -167,6 +167,11 @@ struct TransportSnapshot {
     std::uint32_t blockSize = 0;
     std::uint32_t channelCount = 0;
     std::uint32_t flags = 0;
+
+    /// Field-wise, so padding does not take part. A publisher that republishes an
+    /// identical snapshot every block writes the seqlock for nothing, and the only way
+    /// to avoid that is to be able to ask whether it is identical.
+    [[nodiscard]] bool operator==(const TransportSnapshot&) const noexcept = default;
 };
 static_assert(std::is_trivially_copyable_v<TransportSnapshot>, "published as a block of bytes");
 

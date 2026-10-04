@@ -86,7 +86,7 @@ What that does, and why:
 | **VST 3 loading: parameters, latency, audio, events, state round trip** | **implemented + tested against a real bundle** |
 | CLAP instantiation | not written |
 | Editor *window* embedding | not built; `createEditor()` returns the plug-in's own view handle and the shell owns it (M9/M10). A generic parameter list is the fallback |
-| Out-of-process **audio** sandbox | **transport and helper process built, no caller yet** (M7 phases 1-2) - see the honest limitation below |
+| Out-of-process **audio** sandbox | **transport, helper and proxy built; nothing creates one yet** (M7 phases 1-3) - see the honest limitation below |
 
 ## Scanning
 
@@ -226,10 +226,23 @@ turn a glitch into a stutter. The chain skips bypassed and failed slots, and
   it, watches it, and kills the whole process group when it will not stop.
   `tools/rt_audit.py` scans the helper's loop, so its claim to be real-time safe is
   checked by the build rather than taken on its author's word.
-  **What is still missing is the caller.** Nothing in the engine spawns a helper yet,
-  so no plug-in is isolated by any of this: the proxy that turns a session into a
-  `PluginInstance` is M7 phase 3, and the crash protocol, the watchdog and the policy
-  plumbing that make the isolation worth having are phases 4-6 in
+  `SandboxedPluginInstance` is the proxy: it implements `PluginInstance` on top of a
+  session, so a `PluginChain` cannot tell the difference - it sums the slot's latency
+  like any other, saves and restores its state like any other, and skips it when it
+  has failed like any other. `SandboxSession` owns the lifecycle underneath.
+  A sandboxed slot costs one block of latency, reported through `latencySamples()` so
+  the graph compensates the way it already does for a look-ahead limiter. That promise
+  holds while the helper finishes a block inside a block period, which a device clock
+  gives it the time to do; if it misses, the slot returns dry once and the effective
+  delay becomes two blocks, which `dryBlocks()` reports and phase 4's watchdog treats
+  as a fault. Tests measure which of the two a runner settles at rather than assuming
+  the faster one, because assuming it made an instrumented CI machine look like a
+  broken transport.
+  **What is still missing is the decision to use one.** `PluginHost`'s creation path
+  still returns in-process adapters, so a plug-in a user loads today runs in AURA's
+  address space and a crashing plug-in still crashes AURA. Choosing between the two
+  per plug-in is the policy plumbing of M7 phase 5, and the crash protocol and the
+  watchdog that make the choice worth offering are phase 4, in
   [`research/PLUGIN_SANDBOX_RESEARCH.md`](research/PLUGIN_SANDBOX_RESEARCH.md).
 * **Only bus 0 of the plug-in is the track.** Sidechain and aux buses are wired to
   silence, not routed: the graph has no sidechain send yet (M7/M8). A plug-in with a
