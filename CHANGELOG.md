@@ -13,6 +13,48 @@ written down here did not land.
 
 ### Added
 
+- **M7 phase 3 — the proxy.** `SandboxedPluginInstance` implements `PluginInstance`
+  on top of a helper session, and `SandboxSession` owns that session: create the
+  mapping, lay out the arena, publish what the session is, start the helper, wait
+  for it to report ready, and own its life until it is stopped. A `PluginChain`
+  cannot tell the difference — one test puts the proxy in a real chain and checks
+  latency summing, the state round trip and bypass through the chain's own API.
+  **Nothing in AURA creates one yet**: `PluginHost`'s creation path still returns
+  in-process adapters, and choosing between the two is the policy plumbing of
+  phase 5. So a plug-in loaded by a user today still runs in AURA's address space,
+  and a crashing plug-in still crashes AURA.
+- `SandboxedPluginInstance::process()` pushes and then pops, and the order is the
+  whole trick: the chain processes audio in place, so the buffer is both the input
+  and the destination for the output, and pushing first copies it into the ring's
+  slot before anything overwrites it. `SharedAudioRing::exchange()` pops first —
+  deliberately, to give the helper the longest run at the previous block — and with
+  an in-place caller that order would overwrite the input before publishing it.
+- A refused push now drains one output into scratch and retries, which fixes a
+  deadlock the first version had. Returning early looked safe: the audio stays dry
+  and nothing is lost. But the helper runs under back-pressure, so it holds a
+  processed block until the output ring has room and takes no new input while it
+  does — a host that will not pop until its push succeeds and a helper that will
+  not push until the host pops wait for each other forever, which presents exactly
+  as a hung plug-in. The scratch is allocated in `prepare()` and never in
+  `process()`. A push refused for any other reason (`TooLarge`, `WrongSide`,
+  `NotAttached`) is counted and left dry rather than retried, because retrying a
+  caller bug turns it into a spin.
+- `plugin::kChainMidiOutCapacity` — one constant, used by both `PluginChain::process()`
+  and the proxy. `PluginInstance::process()` takes a raw pointer and a count by
+  reference and never says how big the buffer is, so every implementation had been
+  assuming 64 independently.
+- `TransportSnapshot::operator==`, so a publisher can ask whether the transport moved
+  instead of writing the seqlock twelve times a block for nothing.
+- 8 tests in `tests/plugin/sandbox/SandboxProxyTests.cpp`, each spawning a real
+  helper: audio equal to the reference processor's output at half gain exactly one
+  block late (compared with `==` per sample), notes crossing both ways, a helper
+  that stops leaving the slot dry rather than silent or hung, a real chain that
+  cannot tell the difference, parameter state that round-trips and a blob that is
+  not this slot's being refused, `prepare()` twice leaving one reaped helper rather
+  than two with a unique shared-memory name for the second, a processor that does
+  not exist leaving the slot failed and dry with the helper's own exit code and
+  stderr still available, and bad limits refused without breaking a working session.
+
 - **M7 phase 2 — the plug-in helper process.** `aura_plugin_host`
   (`tools/plugin_host/PluginHostMain.cpp`) is the other side of the sandbox: a
   separate program that attaches to a mapping it did not create, runs audio
@@ -165,6 +207,11 @@ written down here did not land.
 
 ### Changed
 
+- The helper's idle sleep is 200 µs after 512 spins, down from 1 ms after 64. That
+  sleep is the helper's worst-case reaction time to work arriving, and 1 ms against
+  a 2.7 ms block at 128 frames and 48 kHz is a third of the budget spent doing
+  nothing. It still sleeps — which the engine's callback may not — because nothing
+  waits on this thread and spinning would burn the core the host's callback needs.
 - `tools/rt_audit.py` now audits the helper's real-time loop: `RT_SCOPE_GLOBS`
   gains `tools/plugin_host/*.cpp` and `RT_FUNCTION_PATTERNS` gains
   `^runHelperLoop$`. The helper's loop is a real-time thread in every sense the
